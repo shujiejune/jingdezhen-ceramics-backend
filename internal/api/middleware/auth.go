@@ -1,82 +1,104 @@
 package middleware
 
 import (
-	"fmt"
+	"errors"
+	"jingdezhen-ceramics-backend/internal/models"
 	"net/http"
-	"strings"
-	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	echojwt "github.com/labstack/echo-jwt/v4"
 	"github.com/labstack/echo/v4"
-	//"github.com/labstack/echo/v4/middleware" // if using echo's built-in JWT
 )
 
-// Claims struct for JWT
-type JwtCustomClaims struct {
-	UserID string `json:"user_id"` // Or int, depending on your user ID type
-	Email  string `json:"email"`
-	Role   string `json:"role"` // "admin", "normal_user"
-	jwt.RegisteredClaims
-}
-
-// JWTMAuth middleware validates Supabase JWT
-// You'll need your Supabase JWT Secret
+// JWTMAuth configures and returns Echo's JWT middleware.
+// It uses the jwtSecretKey from the config file (.env).
 func JWTMAuth(jwtSecretKey string) echo.MiddlewareFunc {
-	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-			authHeader := c.Request().Header.Get("Authorization")
-			if authHeader == "" {
-				return c.JSON(http.StatusUnauthorized, map[string]string{"message": "Missing Authorization Header"})
-			}
+	config := echojwt.Config{
+		// NewClaimsFunc is required to specify the type of claims object to expect.
+		// The middleware will use this to parse the claims from the token.
+		NewClaimsFunc: func(c echo.Context) jwt.Claims {
+			return new(models.JwtCustomClaims)
+		},
+		// SigningKey is the secret key used to verify the JWT's signature.
+		SigningKey: []byte(jwtSecretKey),
+		// TokenLookup specifies where to look for the token.
+		// Default is "header:Authorization:Bearer <token>". Can customize it if needed.
+		// Example: "query:token,cookie:jwt"
 
-			parts := strings.Split(authHeader, " ")
-			if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-				return c.JSON(http.StatusUnauthorized, map[string]string{"message": "Invalid Authorization Header format"})
-			}
-			tokenString := parts[1]
+		// SuccessHandler is called after a token is successfully validated.
+		// I use it here to extract our custom claims and put them into the context
+		SuccessHandler: func(c echo.Context) {
+			// "user" is the default context key used by echo-jwt
+			// c.Get("user") returns interface{}, so I need to type-assert it
+			userToken := c.Get("user").(*jwt.Token)
+			claims := userToken.Claims.(*models.JwtCustomClaims)
 
-			claims := &JwtCustomClaims{}
-			token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
-				// Validate the alg is what you expect:
-				if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-					return nil, echo.NewHTTPError(http.StatusUnauthorized, fmt.Sprintf("Unexpected signing method: %v", token.Header["alg"]))
-				}
-				return []byte(jwtSecretKey), nil
-			})
-
-			if err != nil {
-				if err == jwt.ErrSignatureInvalid {
-					return c.JSON(http.StatusUnauthorized, map[string]string{"message": "Invalid token signature"})
-				}
-				// Check for expired token specifically if using RegisteredClaims
-				if claims.ExpiresAt != nil && claims.ExpiresAt.Time.Before(time.Now()) {
-					return c.JSON(http.StatusUnauthorized, map[string]string{"message": "Token expired"})
-				}
-				return c.JSON(http.StatusUnauthorized, map[string]string{"message": "Invalid token", "error": err.Error()})
-			}
-
-			if !token.Valid {
-				return c.JSON(http.StatusUnauthorized, map[string]string{"message": "Invalid token"})
-			}
-
-			// Store user info in context for handlers to access
 			c.Set("userID", claims.UserID)
 			c.Set("userEmail", claims.Email)
-			c.Set("userRole", claims.Role) // Make sure Supabase JWT includes role or derive it
+			c.Set("userRole", claims.Role)
+			c.Logger().Infof("JWT Auth successful for user: %s, role: %s", claims.UserID, claims.Role)
+		},
 
+		// ErrorHandler is called when there's an error in token validation (e.g., expired, invalid signature).
+		ErrorHandler: func(c echo.Context, err error) error {
+			// Log the detailed error on the server for debugging
+			c.Logger().Errorf("JWT Error: %v", err)
+
+			// Return a generic error message to the client
+			if errors.Is(err, echojwt.ErrJWTMissing) {
+				return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: "Missing or malformed JWT"})
+			}
+			// Check for more specific errors from the golang-jwt library if wrapped
+			// For example, if err is of type *jwt.ValidationError
+			if errors.Is(err, jwt.ErrTokenMalformed) {
+				return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: "Token is malformed"})
+			} else if errors.Is(err, jwt.ErrTokenExpired) {
+				return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: "Token has expired"})
+			} else if errors.Is(err, jwt.ErrTokenSignatureInvalid) {
+				return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: "Invalid token signature"})
+			} else if err != nil {
+				return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: "Token has expired"})
+			}
+
+			return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: "Invalid or expired JWT"})
+		},
+		// ContextKey: "user", this is default
+	}
+	return echojwt.WithConfig(config)
+}
+
+func AdminRequired() echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		// closure: this inner fucntion closes over "next" (the next middleware) from its surrounding lexical scope (the middle function). Even though the middle function is returned, the inner function has access to the "next" variable.
+		return func(c echo.Context) error {
+			userRole, ok := c.Get("userRole").(string)
+			if !ok {
+				// This case might happen if JWTMAuth's SuccessHandler somehow failed to set the role,
+				// or if AdminRequired is mistakenly used without JWTMAuth setting the context.
+				c.Logger().Error("userRole not found in context for AdminRequired middleware")
+				return c.JSON(http.StatusForbidden, models.ErrorResponse{Message: "Permission denied: Role not determined"})
+			}
+			if userRole != models.RoleAdmin { // Assuming models.RoleAdmin = "admin"
+				return c.JSON(http.StatusForbidden, models.ErrorResponse{Message: "Admin access required"})
+			}
 			return next(c)
 		}
 	}
 }
 
-// AdminRequired middleware checks if the user has an 'admin' role.
-// Should be used AFTER JWTMAuth.
-func AdminRequired() echo.MiddlewareFunc {
+// Might want a similar middleware for normal users if some routes are only for them
+// and not accessible by just any authenticated user (though often admin can do what normal user does)
+func NormalUserRequired() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			userRole, ok := c.Get("userRole").(string)
-			if !ok || userRole != "admin" { // Assuming "admin" is the role string
-				return c.JSON(http.StatusForbidden, map[string]string{"message": "Admin access required"})
+			if !ok {
+				c.Logger().Error("userRole not found in context for NormalUserRequired middleware")
+				return c.JSON(http.StatusForbidden, models.ErrorResponse{Message: "Permission denied: Role not determined"})
+			}
+			// Admins are often considered to also satisfy "normal user" requirements
+			if userRole != models.RoleNormalUser && userRole != models.RoleAdmin {
+				return c.JSON(http.StatusForbidden, models.ErrorResponse{Message: "Access restricted to normal users"})
 			}
 			return next(c)
 		}

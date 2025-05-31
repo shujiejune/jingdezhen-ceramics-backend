@@ -2,13 +2,14 @@ package config
 
 import (
 	"github.com/spf13/viper"
+	"log"
 )
 
 type Config struct {
-	ServerPort        string `mapstructure:"SERVER_PORT"`
-	DatabaseURL       string `mapstructure:"DATABASE_URL"`
-	SupabaseJWTSecret string `mapstructure:"SUPABASE_JWT_SECRET"`
-	ClientOrigin      string `mapstructure:"CLIENT_ORIGIN"`
+	ServerPort   string `mapstructure:"SERVER_PORT"`
+	DatabaseURL  string `mapstructure:"DATABASE_URL"`
+	JWTSecret    string `mapstructure:"JWT_SECRET"`
+	ClientOrigin string `mapstructure:"CLIENT_ORIGIN"`
 	// Add other configurations as needed
 }
 
@@ -22,11 +23,11 @@ func LoadConfig(path string) (config Config, err error) {
 	err = viper.ReadInConfig() // Find and read the config file
 	if err != nil {
 		// Handle errors reading the config file, but allow it if it's just "not found"
-		// if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-		// return
-		// }
-		// If .env file is optional, you might not want to return an error here.
-		// Rely on environment variables set directly.
+		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
+			log.Println("No .env file found.")
+		} else {
+			return
+		}
 	}
 
 	err = viper.Unmarshal(&config)
