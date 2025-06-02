@@ -28,13 +28,9 @@ func SetupRoutes(
 	portfolioHandler *portfolio.Handler,
 	contactHandler *contact.Handler,
 ) {
-	// --- Public Routes ---
 	e.GET("/", func(c echo.Context) error {
 		return c.JSON(http.StatusOK, map[string]string{"message": "Welcome to Jingdezhen Ceramics Platform!"})
 	})
-	e.POST("/contact", contactHandler.submitContactForm)
-
-	// Auth routes
 
 	/* --- User Profile (Protected) --- */
 	// If need backend routes for auth (e.g., refresh token, logout initiated by backend), define here.
