@@ -23,9 +23,6 @@ func main() {
 	}
 
 	e := echo.New()
-	e.GET("/", func(c echo.Context) error {
-		return c.String(http.StatusOK, "Welcome to Jingdezhen Ceramics Learning and Communication Platform!")
-	})
 	e.Logger.Fatal(e.Start(":1323"))
 
 	// Middleware
@@ -53,57 +50,54 @@ func main() {
 		log.Fatalf("Unable to ping database: %v\n", err)
 	}
 	e.Logger.Info("Successfully connected to the database!")
-	/*
-	   	// Dependency injection
-	   	// User Module
-	   	userRepo := user.NewRepository(dbPool)
-	   	userService := user.NewService(userRepo)
-	   	userHandler := user.NewHandler(userService)
-	   	// You'll also need an admin handler if it's separate
-	   	// adminHandler := user.NewAdminHandler(userService, other admin services)
 
-	   	// Ceramic Story Module
-	   	ceramicStoryRepo := ceramicstory.NewRepository(dbPool)
-	   	ceramicStoryService := ceramicstory.NewService(ceramicStoryRepo)
-	   	ceramicStoryHandler := ceramicstory.NewHandler(ceramicStoryService)
+	// Dependency injection
+	userRepo := user.NewRepository(dbPool)
+	userService := user.NewService(userRepo)
+	userHandler := user.NewHandler(userService)
+	// You'll also need an admin handler if it's separate
+	// adminHandler := user.NewAdminHandler(userService, other admin services)
 
-	   	// Gallery Module
-	   	galleryRepo := gallery.NewRepository(dbPool)
-	   	galleryService := gallery.NewService(galleryRepo) // galleryService might also need e.g. userRepo if favorites involve user data directly in service
-	   	galleryHandler := gallery.NewHandler(galleryService)
+	ceramicStoryRepo := ceramicstory.NewRepository(dbPool)
+	ceramicStoryService := ceramicstory.NewService(ceramicStoryRepo)
+	ceramicStoryHandler := ceramicstory.NewHandler(ceramicStoryService)
 
-	   	// Engage Module
-	   	engageRepo := engage.NewRepository(dbPool)
-	   	engageService := engage.NewService(engageRepo)
-	   	engageHandler := engage.NewHandler(engageService)
+	galleryRepo := gallery.NewRepository(dbPool)
+	galleryService := gallery.NewService(galleryRepo) // galleryService might also need e.g. userRepo if favorites involve user data directly in service
+	galleryHandler := gallery.NewHandler(galleryService)
 
-	   	// Course Module
-	   	courseRepo := course.NewRepository(dbPool)
-	   	courseService := course.NewService(courseRepo)
-	   	courseHandler := course.NewHandler(courseService)
+	engageRepo := engage.NewRepository(dbPool)
+	engageService := engage.NewService(engageRepo)
+	engageHandler := engage.NewHandler(engageService)
 
-	   	// Forum Module
-	   	forumRepo := forum.NewRepository(dbPool)
-	   	forumService := forum.NewService(forumRepo)
-	   	forumHandler := forum.NewHandler(forumService)
+	courseRepo := course.NewRepository(dbPool)
+	courseService := course.NewService(courseRepo)
+	courseHandler := course.NewHandler(courseService)
 
-	   	// Portfolio Module
-	   	portfolioRepo := portfolio.NewRepository(dbPool)
-	   	portfolioService := portfolio.NewService(portfolioRepo)
-	   	portfolioHandler := portfolio.NewHandler(portfolioService)
+	forumRepo := forum.NewRepository(dbPool)
+	forumService := forum.NewService(forumRepo)
+	forumHandler := forum.NewHandler(forumService)
 
-	   	// Initialize router, passing all handlers and other necessary dependencies
-	   	api.SetupRoutes(e, cfg.JWTSecret,
-	   		userHandler,
-	           // adminHandler, // Pass if you have a separate admin handler instance
-	   		ceramicStoryHandler,
-	   		galleryHandler,
-	   		engageHandler,
-	   		courseHandler,
-	   		forumHandler,
-	   		portfolioHandler,
-	   	)
-	*/
+	portfolioRepo := portfolio.NewRepository(dbPool)
+	portfolioService := portfolio.NewService(portfolioRepo)
+	portfolioHandler := portfolio.NewHandler(portfolioService)
+
+	contactService := contact.NewService( /* dependencies like an emailer service */ )
+	contactHandlerInstance := contact.NewHandler(contactService)
+
+	// Initialize router, passing all handlers and other necessary dependencies
+	api.SetupRoutes(e, cfg.JWTSecret,
+		userHandler,
+		// adminHandler, // Pass if you have a separate admin handler instance
+		ceramicStoryHandler,
+		galleryHandler,
+		engageHandler,
+		courseHandler,
+		forumHandler,
+		portfolioHandler,
+		contactHandler,
+	)
+
 	// Start server (graceful shutdown logic)
 	go func() {
 		if err := e.Start(":" + cfg.ServerPort); err != nil && err != http.ErrServerClosed {
