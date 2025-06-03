@@ -52,8 +52,13 @@ func main() {
 	e.Logger.Info("Successfully connected to the database!")
 
 	// Dependency injection
+	forumRepo := forum.NewRepository(dbPool)
+	forumService := forum.NewService(forumRepo)
+	forumHandler := forum.NewHandler(forumService)
+
 	userRepo := user.NewRepository(dbPool)
-	userService := user.NewService(userRepo)
+	userNoteRepo := user.NewNoteRepository(dbPool)
+	userService := user.NewService(userRepo, userNoteRepo, forumService)
 	userHandler := user.NewHandler(userService)
 	// You'll also need an admin handler if it's separate
 	// adminHandler := user.NewAdminHandler(userService, other admin services)
@@ -73,10 +78,6 @@ func main() {
 	courseRepo := course.NewRepository(dbPool)
 	courseService := course.NewService(courseRepo)
 	courseHandler := course.NewHandler(courseService)
-
-	forumRepo := forum.NewRepository(dbPool)
-	forumService := forum.NewService(forumRepo)
-	forumHandler := forum.NewHandler(forumService)
 
 	portfolioRepo := portfolio.NewRepository(dbPool)
 	portfolioService := portfolio.NewService(portfolioRepo)

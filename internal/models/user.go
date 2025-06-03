@@ -21,3 +21,16 @@ type User struct {
 	// Add other fields as per your DB schema
 	// PasswordHash string `json:"-" db:"password_hash"` // Typically not sent in JSON response
 }
+
+// UserUpdateData defines fields that can be updated for a user profile
+type UserUpdateData struct {
+	Nickname  *string `json:"nickname,omitempty" validate:"omitempty,min=1,max=100"`
+	AvatarURL *string `json:"avatar_url,omitempty" validate:"omitempty,url"`
+	// Add other updatable fields like contacts from profile_data if needed
+}
+
+// UserWithPasswordHash is used internally when password hash is needed
+type UserWithPasswordHash struct {
+	User
+	PasswordHash string `db:"password_hash"`
+}
