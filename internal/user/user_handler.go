@@ -67,7 +67,7 @@ func (h *Handler) UpdateProfile(c echo.Context) error {
 	return c.JSON(http.StatusOK, user)
 }
 
-func (h *Handler) HandleContactForm(c echo.Context) error {
+func (h *Handler) SubmitContactForm(c echo.Context) error {
 	var req models.ContactFormData
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid request body: " + err.Error()})
@@ -78,7 +78,7 @@ func (h *Handler) HandleContactForm(c echo.Context) error {
 
 	err := h.service.HandleContactSubmission(c.Request().Context(), req)
 	if err != nil {
-		c.Logger().Error("Handler.HandleContactForm: ", err)
+		c.Logger().Error("Handler.SubmitContactForm: ", err)
 		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to submit contact form"})
 	}
 	return c.JSON(http.StatusOK, map[string]string{"message": "Contact form submitted successfully"})
@@ -97,7 +97,7 @@ func (h *Handler) GetUserNotes(c echo.Context) error {
 		c.Logger().Error("Handler.GetUserNotes: ", err)
 		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to retrieve notes"})
 	}
-	return c.JSON(http.StatusOK, models.NewPaginatedResponse(notes, page, limit, total)) // Assume NewPaginatedResponse in models
+	return c.JSON(http.StatusOK, models.NewPaginatedResponse(notes, page, limit, total))
 }
 
 func (h *Handler) CreateUserNote(c echo.Context) error {
@@ -172,6 +172,49 @@ func (h *Handler) DeleteUserNote(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
+func (h *Handler) AddLinkToNote(c echo.Context) error {
+	noteID, err := strconv.Atoi(c.Param("note_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid note ID"})
+	}
+
+	var req models.AddLinkToNoteData
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid request: " + err.Error()})
+	}
+	if err := h.validate.Struct(req); err != nil {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Validation failed: " + err.Error()})
+	}
+
+	note, err := h.service.AddLinkToNote(c.Request().Context(), noteID, req)
+	if err != nil {
+		c.Logger().Error("Handler.AddLinkToNote: ", err)
+		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to add link to note"})
+	}
+	return c.JSON(http.StatusCreated, note)
+}
+
+func (h *Handler) RemoveLinkFromNote(c echo.Context) error {
+	noteID, err := strconv.Atoi(c.Param("note_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid note ID"})
+	}
+	linkID, err := strconv.Atoi(c.Param("link_id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid note ID"})
+	}
+
+	err = h.service.RemoveLinkFromNote(c.Request().Context(), noteID, linkID)
+	if err != nil {
+		if err == models.ErrNotFound {
+			return c.JSON(http.StatusNotFound, models.ErrorResponse{Message: "Link not found"})
+		}
+		c.Logger().Error("Handler.RemoveLinkFromNote: ", err)
+		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to remove link from note"})
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
 func (h *Handler) PublishNoteToForum(c echo.Context) error {
 	userID, err := utils.GetUserIDFromContext(c)
 	if err != nil {
@@ -202,6 +245,54 @@ func (h *Handler) PublishNoteToForum(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to publish note to forum"})
 	}
 	return c.JSON(http.StatusCreated, forumPost)
+}
+
+// GetNotifications would be similar to GetUserNotes, fetching from a notification service/repo
+func (h *Handler) GetNotifications(c echo.Context) error {
+	userID, err := utils.GetUserIDFromContext(c)
+	if err != nil {
+		return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: err.Error()})
+	}
+
+	page, limit := utils.GetPageLimit(c)
+	notifications, total, err := h.service.GetNotifications(c.Request().Context(), userID, page, limit)
+	if err != nil {
+		c.Logger().Error("Handler.GetNotifications: ", err)
+		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to retrieve notifications"})
+	}
+	return c.JSON(http.StatusOK, models.NewPaginatedResponse(notifications, page, limit, total))
+}
+
+// GetFavoriteArtworks - requires gallery service/repo interaction
+func (h *Handler) GetFavoriteArtworks(c echo.Context) error {
+	userID, err := utils.GetUserIDFromContext(c)
+	if err != nil {
+		return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: err.Error()})
+	}
+
+	page, limit := utils.GetPageLimit(c)
+	favArtworks, total, err := h.service.GetFavArtworks(c.Request().Context(), userID, page, limit)
+	if err != nil {
+		c.Logger().Error("Handler.GetFavArtworks: ", err)
+		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to retrieve favorite artworks"})
+	}
+	return c.JSON(http.StatusOK, models.NewPaginatedResponse(favArtworks, page, limit, total))
+}
+
+// GetSavedForumPosts - requires forum service/repo interaction
+func (h *Handler) GetSavedForumPosts(c echo.Context) error {
+	userID, err := utils.GetUserIDFromContext(c)
+	if err != nil {
+		return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: err.Error()})
+	}
+
+	page, limit := utils.GetPageLimit(c)
+	savedForumPosts, total, err := h.service.GetSavedForumPosts(c.Request().Context(), userID, page, limit)
+	if err != nil {
+		c.Logger().Error("Handler.GetSavedForumPosts: ", err)
+		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to retrieve saved forum posts"})
+	}
+	return c.JSON(http.StatusOK, models.NewPaginatedResponse(savedForumPosts, page, limit, total))
 }
 
 // --- Admin User Management Routes ---
@@ -238,23 +329,4 @@ func (h *Handler) AdminUpdateUserRole(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to update user role"})
 	}
 	return c.JSON(http.StatusOK, map[string]string{"message": "User role updated successfully"})
-}
-
-// GetNotifications would be similar to GetUserNotes, fetching from a notification service/repo
-func (h *Handler) GetNotifications(c echo.Context) error {
-	// userID, _ := utils.GetUserIDFromContext(c)
-	// page, limit := utils.GetPageLimit(c)
-	// notifications, total, err := h.notificationService.GetUserNotifications(c.Request().Context(), userID, page, limit)
-	// ...
-	return c.JSON(http.StatusOK, map[string]string{"message": "Notifications endpoint not fully implemented yet."})
-}
-
-// GetFavoriteArtworks - requires gallery service/repo interaction
-func (h *Handler) GetFavoriteArtworks(c echo.Context) error {
-	return c.JSON(http.StatusOK, map[string]string{"message": "Favorite artworks endpoint not fully implemented yet."})
-}
-
-// GetSavedForumPosts - requires forum service/repo interaction
-func (h *Handler) GetSavedForumPosts(c echo.Context) error {
-	return c.JSON(http.StatusOK, map[string]string{"message": "Saved forum posts endpoint not fully implemented yet."})
 }

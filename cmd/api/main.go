@@ -9,7 +9,16 @@ import (
 	"syscall"
 	"time"
 
+	"jingdezhen-ceramics-backend/internal/api"
+	"jingdezhen-ceramics-backend/internal/ceramicstory"
 	"jingdezhen-ceramics-backend/internal/config"
+	"jingdezhen-ceramics-backend/internal/course"
+	"jingdezhen-ceramics-backend/internal/engage"
+	"jingdezhen-ceramics-backend/internal/forum"
+	"jingdezhen-ceramics-backend/internal/gallery"
+	"jingdezhen-ceramics-backend/internal/portfolio"
+	"jingdezhen-ceramics-backend/internal/user"
+	"jingdezhen-ceramics-backend/pkg/email"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
@@ -52,13 +61,20 @@ func main() {
 	e.Logger.Info("Successfully connected to the database!")
 
 	// Dependency injection
+	emailService := email.NewSMTPService(
+		cfg.SMTPServer, // Assuming these are in your config
+		cfg.SMTPPort,
+		cfg.SMTPUser,
+		cfg.SMTPPassword,
+		cfg.EmailFromAddress,
+	)
+
 	forumRepo := forum.NewRepository(dbPool)
 	forumService := forum.NewService(forumRepo)
 	forumHandler := forum.NewHandler(forumService)
 
 	userRepo := user.NewRepository(dbPool)
-	userNoteRepo := user.NewNoteRepository(dbPool)
-	userService := user.NewService(userRepo, userNoteRepo, forumService)
+	userService := user.NewService(userRepo, forumService, emailService, cfg.AdminEmail)
 	userHandler := user.NewHandler(userService)
 	// You'll also need an admin handler if it's separate
 	// adminHandler := user.NewAdminHandler(userService, other admin services)
@@ -83,9 +99,6 @@ func main() {
 	portfolioService := portfolio.NewService(portfolioRepo)
 	portfolioHandler := portfolio.NewHandler(portfolioService)
 
-	contactService := contact.NewService( /* dependencies like an emailer service */ )
-	contactHandlerInstance := contact.NewHandler(contactService)
-
 	// Initialize router, passing all handlers and other necessary dependencies
 	api.SetupRoutes(e, cfg.JWTSecret,
 		userHandler,
@@ -96,7 +109,6 @@ func main() {
 		courseHandler,
 		forumHandler,
 		portfolioHandler,
-		contactHandler,
 	)
 
 	// Start server (graceful shutdown logic)

@@ -3,7 +3,6 @@ package api
 import (
 	"jingdezhen-ceramics-backend/internal/api/middleware"
 	"jingdezhen-ceramics-backend/internal/ceramicstory"
-	"jingdezhen-ceramics-backend/internal/contact"
 	"jingdezhen-ceramics-backend/internal/course"
 	"jingdezhen-ceramics-backend/internal/engage"
 	"jingdezhen-ceramics-backend/internal/forum"
@@ -19,18 +18,19 @@ import (
 func SetupRoutes(
 	e *echo.Echo, jwtSecretKey string,
 	userHandler *user.Handler,
-	adminHandler *user.AdminHandler,
 	csHandler *ceramicstory.Handler,
 	galleryHandler *gallery.Handler,
 	engageHandler *engage.Handler,
 	courseHandler *course.Handler,
 	forumHandler *forum.Handler,
 	portfolioHandler *portfolio.Handler,
-	contactHandler *contact.Handler,
 ) {
 	e.GET("/", func(c echo.Context) error {
-		return c.JSON(http.StatusOK, map[string]string{"message": "Welcome to Jingdezhen Ceramics Platform!"})
+		return c.JSON(http.StatusOK, map[string]string{"message": "Welcome to Jingdezhen Ceramics Learning and Communication Platform!"})
 	})
+
+	/* --- Contact (send feedback) --- */
+	e.POST("/contact", userHandler.SubmitContactForm)
 
 	/* --- User Profile (Protected) --- */
 	// If need backend routes for auth (e.g., refresh token, logout initiated by backend), define here.
@@ -44,6 +44,9 @@ func SetupRoutes(
 		profileGroup.POST("/notes", userHandler.CreateUserNote)
 		profileGroup.PUT("/notes/:note_id", userHandler.UpdateUserNote)
 		profileGroup.DELETE("/notes/:note_id", userHandler.DeleteUserNote)
+		profileGroup.POST("notes/:note_id/links", userHandler.AddLinkToNote)
+		profileGroup.DELETE("notes/:note_id/links/:link_id", userHandler.RemoveLinkFromNote)
+		profileGroup.GET("/notifications", userHandler.GetNotifications)
 		profileGroup.GET("/favorite-artworks", userHandler.GetFavoriteArtworks)
 		profileGroup.GET("/saved-posts", userHandler.GetSavedForumPosts)
 		// ... other user-specific routes like badges, subscriptions
@@ -158,7 +161,4 @@ func SetupRoutes(
 		adminGroup.POST("/portfolio/works/:work_id/highlight", adminHandler.HighlightPortfolioWork)
 		// ... other admin functionalities
 	}
-
-	/* --- Contact (send feedback) --- */
-	e.POST("/contact", contactHandler.SubmitContactForm)
 }

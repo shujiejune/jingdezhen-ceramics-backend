@@ -16,6 +16,7 @@ import (
 type RepositoryInterface interface {
 	FindByID(ctx context.Context, userID string) (*models.User, error)
 	FindByEmail(ctx context.Context, email string) (*models.User, error)
+	FindByNickname(ctx context.Context, nickname string) (*models.User, error)
 	Create(ctx context.Context, user *models.User, passwordHash string) (*models.User, error) // Assuming you might add direct user creation
 	Update(ctx context.Context, userID string, updateData models.UserUpdateData) (*models.User, error)
 	ListAll(ctx context.Context, page, limit int) ([]models.User, int, error) // For admin: list users
@@ -23,11 +24,19 @@ type RepositoryInterface interface {
 
 	// User Notes specific methods
 	GetUserNoteByID(ctx context.Context, noteID int, userID string) (*models.UserNote, error)
+	GetLinksForNote(ctx context.Context, noteID int) ([]models.UserNoteLink, error)
 	ListUserNotes(ctx context.Context, userID string, page, limit int) ([]models.UserNote, int, error)
 	CreateUserNote(ctx context.Context, userID string, data models.CreateUserNoteData) (*models.UserNote, error)
 	UpdateUserNote(ctx context.Context, noteID int, userID string, data models.UpdateUserNoteData) (*models.UserNote, error)
 	DeleteUserNote(ctx context.Context, noteID int, userID string) error
+	AddLinkToNote(ctx context.Context, noteID int, data models.AddLinkToNoteData) (*models.UserNoteLink, error)
+	RemoveLinkFromNote(ctx context.Context, noteID, linkID int) error
 	MarkNoteAsPublished(ctx context.Context, noteID int, forumPostID int) error
+
+	// Other profile data
+	GetNotifications(ctx context.Context, userID string, page, limit int) ([]models.Notification, int, error)
+	GetFavArtworks(ctx context.Context, userID string, page, limit int) ([]models.UserFavArtworkEntry, int, error)
+	GetSavedForumPosts(ctx context.Context, userID string, page, limit int) ([]models.UserSavedPostEntry, int, error)
 }
 
 type Repository struct {
@@ -66,6 +75,21 @@ func (r *Repository) FindByEmail(ctx context.Context, email string) (*models.Use
 			return nil, models.ErrNotFound
 		}
 		return nil, fmt.Errorf("repository.FindByEmail: %w", err)
+	}
+	return user, nil
+}
+
+func (r *Repository) FindByNickname(ctx context.Context, nickname string) (*models.User, error) {
+	user := &models.User{}
+	query := `SELECT id, nickname, email, role, avatar_url, password_hash, created_at, updated_at FROM users WHERE nickname = $1`
+	err := r.db.QueryRow(ctx, query, nickname).Scan(
+		&user.ID, &user.Nickname, &user.Email, &user.Role, &user.AvatarURL, &user.PasswordHash, &user.CreatedAt, &user.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows || strings.Contains(err.Error(), "no rows in result set") {
+			return nil, models.ErrNotFound
+		}
+		return nil, fmt.Errorf("repository.FindByNickname: %w", err)
 	}
 	return user, nil
 }
@@ -184,6 +208,25 @@ func (r *Repository) GetUserNoteByID(ctx context.Context, noteID int, userID str
 	return note, nil
 }
 
+func (r *Repository) GetLinksForNote(ctx context.Context, noteID int) ([]models.UserNoteLink, error) {
+	links := []models.UserNoteLink{}
+	query := `SELECT id, user_note_id, linked_entity_type, linked_entity_id_int, linked_entity_id_uuid, linked_entity_id_string, linked_description, created_at
+	          FROM user_note_links WHERE user_note_id = $1`
+	rows, err := r.db.Query(ctx, query, noteID)
+	if err != nil {
+		return nil, fmt.Errorf("repository.GetLinksForNote: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var link models.UserNoteLink
+		if err := rows.Scan(&link.UserNoteID, &link.LinkedEntityType, &link.LinkedEntityIDInt, &link.LinkedEntityIDUUID, &link.LinkedEntityIDString, &link.LinkDescription, &link.CreatedAt); err != nil {
+			return nil, fmt.Errorf("repository.GetLinksForNote.Scan: %w", err)
+		}
+		links = append(links, link)
+	}
+	return links, nil
+}
+
 func (r *Repository) ListUserNotes(ctx context.Context, userID string, page, limit int) ([]models.UserNote, int, error) {
 	// Implement pagination similar to ListAllUsers
 	notes := []models.UserNote{}
@@ -273,6 +316,37 @@ func (r *Repository) DeleteUserNote(ctx context.Context, noteID int, userID stri
 	return nil
 }
 
+func (r *Repository) AddLinkToNote(ctx context.Context, noteID int, data models.AddLinkToNoteData) (*models.UserNoteLink, error) {
+	link := models.UserNoteLink{
+		UserNoteID:           noteID,
+		LinkedEntityType:     data.LinkedEntityType,
+		LinkedEntityIDInt:    data.LinkedEntityIDInt,
+		LinkedEntityIDUUID:   data.LinkedEntityIDUUID,
+		LinkedEntityIDString: data.LinkedEntityIDString,
+		LinkDescription:      data.LinkDescription,
+		CreatedAt:            time.Now(),
+	}
+	query := `INSERT INTO user_note_links (user_note_id, linked_entity_type, linked_entity_id_int, linked_entity_id_uuid, linked_entity_id_string, link_description, created_at)
+	          VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`
+	err := r.db.QueryRow(ctx, query, link.UserNoteID, link.LinkedEntityType, link.LinkedEntityIDInt, link.LinkedEntityIDUUID, link.LinkedEntityIDString, link.LinkDescription, link.CreatedAt).Scan(&link.ID)
+	if err != nil {
+		return nil, fmt.Errorf("repository.AddLinkToNote: %w", err)
+	}
+	return &link, nil
+}
+
+func (r *Repository) RemoveLinkFromNote(ctx context.Context, noteID, linkID int) error {
+	query := `DELETE FROM user_note_links WHERE id = $1 AND user_note_id = $2`
+	cmdTag, err := r.db.Exec(ctx, query, linkID, noteID)
+	if err != nil {
+		return fmt.Errorf("repository.RemoveLinkFromNote: %w", err)
+	}
+	if cmdTag.RowsAffected() == 0 {
+		return models.ErrNotFound
+	}
+	return nil
+}
+
 func (r *Repository) MarkNoteAsPublished(ctx context.Context, noteID int, forumPostID int) error {
 	query := `UPDATE user_notes SET is_published_to_forum = TRUE, forum_post_id = $1, updated_at = $2 WHERE id = $3`
 	_, err := r.db.Exec(ctx, query, forumPostID, time.Now(), noteID)
@@ -280,4 +354,170 @@ func (r *Repository) MarkNoteAsPublished(ctx context.Context, noteID int, forumP
 		return fmt.Errorf("repository.MarkNoteAsPublished: %w", err)
 	}
 	return nil
+}
+
+// --- Other Profile Data Methods ---
+func (r *Repository) GetNotifications(ctx context.Context, userID string, page, limit int) ([]models.Notification, int, error) {
+	notifications := []models.Notification{}
+	offset := (page - 1) * limit
+	query := `SELECT id, recipient_user_id, actor_user_id, action_type, entity_type, entity_id, message, is_read, created_at
+	          FROM notifications WHERE recipient_user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`
+	rows, err := r.db.Query(ctx, query, userID, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("repository.GetNotifications: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var notification models.Notification
+		// Scan fewer fields for list view if full content not needed
+		if err := rows.Scan(&notification.ID, &notification.RecipientUserID, &notification.ActorUserID, &notification.ActionType, &notification.EntityType, &notification.EntityID, &notification.Message, &notification.IsRead, &notification.CreatedAt); err != nil {
+			return nil, 0, fmt.Errorf("repository.GetNotifications.Scan: %w", err)
+		}
+		notifications = append(notifications, notification)
+	}
+
+	var total int
+	err = r.db.QueryRow(ctx, "SELECT COUNT(*) FROM notifications WHERE recipient_user_id = $1", userID).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("repository.GetNotifications.Count: %w", err)
+	}
+	return notifications, total, nil
+}
+
+func (r *Repository) GetFavArtworks(ctx context.Context, userID string, page, limit int) ([]models.UserFavArtworkEntry, int, error) {
+	offset := (page - 1) * limit
+
+	// 1. Get artwork_ids and total count of favorites
+	var artworkIDs []int64
+	var favoritedAtTimes []time.Time
+
+	queryFavs := `SELECT ufa.artwork_id, ufa.created_at
+	          FROM user_favorite_artworks ufa WHERE ufa.user_id = $1 ORDER BY ufa.created_at DESC LIMIT $2 OFFSET $3`
+	rows, err := r.db.Query(ctx, queryFavs, userID, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("repository.GetFavArtworks.QueryFavs: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var artworkID int64
+		var favTime time.Time
+
+		if err := rows.Scan(&artworkID, &favTime); err != nil {
+			return nil, 0, fmt.Errorf("repository.GetFavArtworks.ScanFavIDs: %w", err)
+		}
+		artworkIDs = append(artworkIDs, artworkID)
+		favoritedAtTimes = append(favoritedAtTimes, favTime)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("repository.GetFavArtworks.RowsErr: %w", err)
+	}
+
+	var total int
+	err = r.db.QueryRow(ctx, "SELECT COUNT(*) FROM user_favorite_artworks WHERE user_id = $1", userID).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("repository.GetFavArtworks.Count: %w", err)
+	}
+
+	// 2. Fetch artwork details for the retrieved IDs
+	artworksQuery := `
+        SELECT
+            a.id, a.title, a.thumbnail_url,
+            ar.name as artist_name
+        FROM artworks a
+        LEFT JOIN artists ar ON a.artist_id = ar.id
+        WHERE a.id = ANY($1::bigint[])` // Use ANY for array of IDs
+
+	artworkRows, err := r.db.Query(ctx, artworksQuery, artworkIDs)
+	if err != nil {
+		return nil, total, fmt.Errorf("repository.GetFavArtworks.QueryArtworks: %w", err)
+	}
+	defer artworkRows.Close()
+
+	favArtworksMap := make(map[int64]models.UserFavArtworkEntry)
+	for artworkRows.Next() {
+		var art models.UserFavArtworkEntry
+		var artistName sql.NullString // Handle potentially NULL artist name
+		if err := artworkRows.Scan(&art.Artwork.ID, &art.Artwork.Title, &art.Artwork.ThumbnailURL, &artistName); err != nil {
+			return nil, total, fmt.Errorf("repository.GetFavArtworks.ScanArtworks: %w", err)
+		}
+		if artistName.Valid {
+			art.Artwork.ArtistName = artistName.String
+		}
+		// You might want to add the 'favorited_at' time to the Artwork struct for display
+		// For now, just populating the map.
+		favArtworksMap[art.Artwork.ID] = art
+	}
+	if err := artworkRows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("repository.GetFavArtworks.ArtworkRowsErr: %w", err)
+	}
+
+	// Order results according to artworkIDs (which were ordered by favorite time)
+	orderedFavArtworks := make([]models.UserFavArtworkEntry, 0, len(artworkIDs))
+	for i, id := range artworkIDs {
+		if art, ok := favArtworksMap[id]; ok {
+			art.FavoritedAt = favoritedAtTimes[i]
+			orderedFavArtworks = append(orderedFavArtworks, art)
+		}
+	}
+
+	return orderedFavArtworks, total, nil
+}
+
+func (r *Repository) GetSavedForumPosts(ctx context.Context, userID string, page, limit int) ([]models.UserSavedPostEntry, int, error) {
+	offset := (page - 1) * limit
+	var postIDs []int64
+	var savedTimes []time.Time
+
+	querySaved := `SELECT post_id, created_at 
+	           FROM user_saved_forum_posts WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`
+	rows, err := r.db.Query(ctx, querySaved, userID, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("repository.GetSavedForumPosts: %w", err)
+	}
+	defer rows.Close()
+
+	var total int
+	err = r.db.QueryRow(ctx, "SELECT COUNT(*) FROM user_saved_forum_posts WHERE user_id = $1", userID).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("repository.GetSavedForumPosts.Count: %w", err)
+	}
+	if len(postIDs) == 0 {
+		return []models.UserSavedPostEntry{}, total, nil
+	}
+
+	postsQuery := `
+        SELECT fp.id, fp.title, fp.category_id, c.name as category_name,
+               u.nickname as author_nickname, fp.last_activity_at
+        FROM forum_posts fp
+        JOIN users u ON fp.user_id = u.id
+        LEFT JOIN forum_categories c ON fp.category_id = c.id
+        WHERE fp.id = ANY($1::bigint[])`
+	postRows, err := r.db.Query(ctx, postsQuery, postIDs)
+	if err != nil {
+		return nil, total, fmt.Errorf("repository.GetSavedForumPosts.QueryPosts: %w", err)
+	}
+
+	// Order results according to postIDs (which were ordered by saved time)
+	postsMap := make(map[int64]models.UserSavedPostEntry)
+	for postRows.Next() {
+		var post models.UserSavedPostEntry
+		if err := postRows.Scan(&post.Post.ID, &post.Post.Title, &post.Post.CategoryID, &post.Post.CategoryName, &post.Post.AuthorNickname, &post.Post.LastActivityAt); err != nil {
+			return nil, total, fmt.Errorf("repository.GetFavArtworks.ScanArtworks: %w", err)
+		}
+		postsMap[post.Post.ID] = post
+	}
+	if err := postRows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("repository.GetSavedForumPosts.PostRowsErr: %w", err)
+	}
+
+	orderedPosts := make([]models.UserSavedPostEntry, 0, len(postIDs))
+	for i, id := range postIDs {
+		if post, ok := postsMap[id]; ok {
+			post.SavedAt = savedTimes[i]
+			orderedPosts = append(orderedPosts, post)
+		}
+	}
+
+	return orderedPosts, total, nil
 }

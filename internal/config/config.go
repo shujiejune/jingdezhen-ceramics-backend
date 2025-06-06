@@ -10,6 +10,7 @@ type Config struct {
 	DatabaseURL  string `mapstructure:"DATABASE_URL"`
 	JWTSecret    string `mapstructure:"JWT_SECRET"`
 	ClientOrigin string `mapstructure:"CLIENT_ORIGIN"`
+	AdminEmail   string `mapstructure:"ADMIN_EMAIL"`
 	// Add other configurations as needed
 }
 

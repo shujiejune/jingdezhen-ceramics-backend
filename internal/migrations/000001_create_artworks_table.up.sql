@@ -4,6 +4,7 @@ CREATE TABLE artworks (
     title VARCHAR(255) NOT NULL,
     artist_id INT REFERENCES artists(id) ON DELETE SET NULL, -- Can be null if artist unknown or not in DB
     artist_name_override VARCHAR(255), -- If artist not in artists table or to override
+    thumbnail_url TEXT NOT NULL,
     description TEXT,
     period VARCHAR(50),
     dimensions VARCHAR(100), -- e.g., "20cm x 30cm x 15cm"
