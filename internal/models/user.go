@@ -22,6 +22,22 @@ type User struct {
 	// Add other fields as per your DB schema
 }
 
+type SignupRequest struct {
+	Nickname string `json:"nickname" validate:"required,min=2,max=50"`
+	Email    string `json:"email" validate:"required,email"`
+	Password string `json:"password" validate:"required,min=8"`
+}
+
+type LoginRequest struct {
+	Email    string `json:"email" validate:"required,email"`
+	Password string `json:"password" validate:"required"`
+}
+
+type AuthResponse struct {
+	AccessToken string `json:"access_token"`
+	User        *User  `json:"user"`
+}
+
 // UserUpdateData defines fields that can be updated for a user profile
 type UserUpdateData struct {
 	Nickname  *string `json:"nickname,omitempty" validate:"omitempty,min=1,max=100"`

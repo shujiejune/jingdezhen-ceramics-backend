@@ -13,6 +13,9 @@ import (
 
 // ServiceInterface defines methods for user business logic.
 type ServiceInterface interface {
+	Signup(ctx context.Context, req models.SignupRequest) (*models.AuthResponse, error)
+	Login(ctx context.Context, req models.LoginRequest) (*models.AuthResponse, error)
+
 	GetUserProfile(ctx context.Context, userID string) (*models.User, error)
 	UpdateUserProfile(ctx context.Context, userID string, data models.UserUpdateData) (*models.User, error)
 	HandleContactSubmission(ctx context.Context, data models.ContactFormData) error
@@ -64,6 +67,81 @@ func NewService(
 	}
 }
 
+func (s *Service) Signup(ctx context.Context, req models.SignupRequest) (*models.AuthResponse, error) {
+	// 1. Check if user with that email already exists
+	_, err := s.userRepo.FindByEmail(ctx, req.Email)
+	if err != nil && !errors.Is(err, models.ErrNotFound) {
+		// Some other database error occurred
+		return nil, fmt.Errorf("service.Signup.FindByEmail: %w", err)
+	}
+	if err == nil {
+		// User was found, email is taken
+		return nil, models.ErrConflict
+	}
+
+	// 2. Hash the password
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, fmt.Errorf("service.Signup.HashPassword: %w", err)
+	}
+
+	// 3. Create the user in the database
+	newUser := &models.User{
+		Nickname: req.Nickname,
+		Email:    req.Email,
+		Role:     models.RoleNormalUser, // Default role
+	}
+	createdUser, err := s.userRepo.Create(ctx, newUser, string(hashedPassword))
+	if err != nil {
+		return nil, fmt.Errorf("service.Signup.CreateUser: %w", err)
+	}
+
+	// 4. Generate a JWT for the new user
+	// This would call a JWT utility/service you create
+	accessToken, err := s.jwtService.GenerateToken(createdUser.ID, createdUser.Email, createdUser.Role)
+	if err != nil {
+		return nil, fmt.Errorf("service.Signup.GenerateToken: %w", err)
+	}
+
+	// 5. Return the response
+	authResponse := &models.AuthResponse{
+		AccessToken: accessToken,
+		User:        createdUser,
+	}
+	return authResponse, nil
+}
+
+func (s *Service) Login(ctx context.Context, req models.LoginRequest) (*models.AuthResponse, error) {
+	// 1. Find user by email
+	userWithHash, err := s.userRepo.FindByEmail(ctx, req.Email) // This needs to return password hash
+	if err != nil {
+		if errors.Is(err, models.ErrNotFound) {
+			return nil, models.ErrInvalidCredentials
+		}
+		return nil, fmt.Errorf("service.Login.FindByEmail: %w", err)
+	}
+
+	// 2. Compare the provided password with the stored hash
+	err = bcrypt.CompareHashAndPassword([]byte(userWithHash.PasswordHash), []byte(req.Password))
+	if err != nil {
+		// Passwords don't match
+		return nil, models.ErrInvalidCredentials
+	}
+
+	// 3. Generate JWT
+	accessToken, err := s.jwtService.GenerateToken(userWithHash.ID, userWithHash.Email, userWithHash.Role)
+	if err != nil {
+		return nil, fmt.Errorf("service.Login.GenerateToken: %w", err)
+	}
+
+	// 4. Return the response (without the password hash!)
+	userWithHash.PasswordHash = "" // Clear sensitive info
+	authResponse := &models.AuthResponse{
+		AccessToken: accessToken,
+		User:        &userWithHash.User,
+	}
+	return authResponse, nil
+}
 func (s *Service) GetUserProfile(ctx context.Context, userID string) (*models.User, error) {
 	user, err := s.userRepo.FindByID(ctx, userID)
 	if err != nil {
