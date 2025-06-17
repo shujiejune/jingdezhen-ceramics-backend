@@ -1,6 +1,7 @@
 package user
 
 import (
+	"errors"
 	"jingdezhen-ceramics-backend/internal/models"
 	"jingdezhen-ceramics-backend/pkg/utils"
 	"net/http"
@@ -22,6 +23,48 @@ func NewHandler(service ServiceInterface) *Handler {
 		service:  service,
 		validate: validator.New(),
 	}
+}
+
+func (h *Handler) Signup(c echo.Context) error {
+	var req models.SignupRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid request body"})
+	}
+	if err := h.validate.Struct(req); err != nil {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Validation failed: " + err.Error()})
+	}
+
+	authResponse, err := h.service.Signup(c.Request().Context(), req)
+	if err != nil {
+		if errors.Is(err, models.ErrConflict) {
+			return c.JSON(http.StatusConflict, models.ErrorResponse{Message: "Email address is already in use"})
+		}
+		c.Logger().Error("Handler.Signup: ", err)
+		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to create user"})
+	}
+
+	return c.JSON(http.StatusCreated, authResponse)
+}
+
+func (h *Handler) Login(c echo.Context) error {
+	var req models.LoginRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid request body"})
+	}
+	if err := h.validate.Struct(req); err != nil {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Validation failed: " + err.Error()})
+	}
+
+	authResponse, err := h.service.Login(c.Request().Context(), req)
+	if err != nil {
+		if errors.Is(err, models.ErrInvalidCredentials) { // Define this error in models
+			return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: "Invalid email or password"})
+		}
+		c.Logger().Error("Handler.Login: ", err)
+		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to log in"})
+	}
+
+	return c.JSON(http.StatusOK, authResponse)
 }
 
 // --- User Profile Routes ---

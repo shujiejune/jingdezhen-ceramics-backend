@@ -32,6 +32,15 @@ func SetupRoutes(
 	/* --- Contact (send feedback) --- */
 	e.POST("/contact", userHandler.SubmitContactForm)
 
+	/* --- Auth (Public) --- */
+	authGroup := e.Group("/auth")
+	{
+		authGroup.POST("/signup", userHandler.Signup)
+		authGroup.POST("/login", userHandler.Login)
+		authGroup.PUT("logout", userHandler.Logout)
+		authGroup.PUT("reset-password", userHandler.ResetPassword)
+	}
+
 	/* --- User Profile (Protected) --- */
 	// If need backend routes for auth (e.g., refresh token, logout initiated by backend), define here.
 	profileGroup := e.Group("/profile")

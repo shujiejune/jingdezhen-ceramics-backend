@@ -3,6 +3,7 @@ package ceramicstory
 import (
 	"jingdezhen-ceramics-backend/internal/models"
 	"net/http"
+	"strings"
 
 	// "github.com/go-playground/validator/v10" // If you add admin routes for C/U/D
 	"github.com/labstack/echo/v4"
@@ -34,7 +35,7 @@ func (h *Handler) GetAllDynasties(c echo.Context) error {
 	}
 
 	if len(stories) == 0 {
-		return c.JSON(http.StatusOK, []models.CeramicStory{}) // Return empty list, not an error
+		return c.JSON(http.StatusOK, []models.CeramicStory{})
 	}
 
 	return c.JSON(http.StatusOK, stories)

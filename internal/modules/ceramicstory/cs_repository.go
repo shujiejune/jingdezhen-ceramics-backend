@@ -40,7 +40,7 @@ func (r *Repository) FindAll(ctx context.Context) ([]models.CeramicStory, error)
 		       description, characteristics_craft, characteristics_art, 
 		       image_url, takeaways, display_order
 		FROM ceramic_stories
-		ORDER BY display_order ASC, start_year ASC
+		ORDER BY display_order ASC, start_year DSC
 	`
 	rows, err := r.db.Query(ctx, query)
 	if err != nil {
