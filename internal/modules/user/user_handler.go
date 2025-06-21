@@ -70,7 +70,6 @@ func (h *Handler) Login(c echo.Context) error {
 
 // GoogleLogin initiates the Google OAuth 2.0 login flow.
 // It redirects the user to Google's consent screen.
-// Corresponds to: authGroup.GET("/google/login", userHandler.GoogleLogin)
 func (h *Handler) GoogleLogin(c echo.Context) error {
 	// The service generates the unique URL for this login attempt.
 	// This URL includes the client ID and a state parameter for security.
@@ -86,13 +85,12 @@ func (h *Handler) GoogleLogin(c echo.Context) error {
 
 // GoogleCallback handles the callback request from Google after the user has authenticated.
 // Google redirects the user here with a `code` and `state` parameter in the URL.
-// Corresponds to: authGroup.GET("/google/callback", userHandler.GoogleCallback)
 func (h *Handler) GoogleCallback(c echo.Context) error {
 	// For a production app, you must validate the `state` parameter here against a value
 	// stored in the user's session/cookie to prevent CSRF attacks. We'll omit for simplicity.
-	// if c.QueryParam("state") != storedState {
-	//     return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: "Invalid state"})
-	// }
+	if c.QueryParam("state") != storedState {
+		return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: "Invalid state"})
+	}
 
 	// Get the authorization code from the query parameters.
 	code := c.QueryParam("code")
@@ -113,7 +111,7 @@ func (h *Handler) GoogleCallback(c echo.Context) error {
 	// A common way is to redirect the user back to a specific frontend page
 	// and include the token as a query parameter.
 	// The frontend page can then parse the token from the URL and save it.
-	redirectURL := fmt.Sprintf("%s/login/success?token=%s", h.service.GetFrontendDomain(), authResponse.AccessToken)
+	redirectURL := fmt.Sprintf("%s/login/success?token=%s", h.service.ClientOrigin, authResponse.AccessToken)
 	return c.Redirect(http.StatusTemporaryRedirect, redirectURL)
 }
 

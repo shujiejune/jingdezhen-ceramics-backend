@@ -382,7 +382,7 @@ func (s *Service) HandleGoogleCallback(ctx context.Context, code string) (*model
 	// and potentially link the Google account by setting AuthProvider and AuthProviderID.
 	// For now, we'll just log them in.
 
-	// 4. Generate our application's JWT for this user.
+	// 4. Issue JWT for this user.
 	return s.generateAuthResponse(user)
 }
 
