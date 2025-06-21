@@ -38,7 +38,11 @@ func SetupRoutes(
 		authGroup.POST("/signup", userHandler.Signup)
 		authGroup.POST("/login", userHandler.Login)
 		authGroup.POST("/activate", userHandler.ActivateAccount)
-		authGroup.POST("reset-password", userHandler.RequestPasswordReset)
+		authGroup.POST("resend-activation", userHandler.ResendActivation)
+		authGroup.POST("request-password-reset", userHandler.RequestPasswordReset)
+		authGroup.POST("reset-password", userHandler.ResetPassword)
+		authGroup.GET("/google/login", userHandler.GoogleLogin)
+		authGroup.GET("/google/callback", userHandler.GoogleCallback)
 	}
 
 	/* --- User Profile (Protected) --- */

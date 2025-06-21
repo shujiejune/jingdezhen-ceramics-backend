@@ -2,17 +2,22 @@ package user
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"jingdezhen-ceramics-backend/internal/models"
 	"jingdezhen-ceramics-backend/internal/modules/forum" // For publishing notes
 	"jingdezhen-ceramics-backend/pkg/email"
 	"jingdezhen-ceramics-backend/pkg/utils"
 	"log"
+	"net/http"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 )
 
 // ServiceInterface defines methods for user business logic.
@@ -56,11 +61,12 @@ type Service struct {
 	userRepo RepositoryInterface
 	// For simplicity, userNote specific methods are on RepositoryInterface for now.
 	// In a larger system, userNoteRepo might be a separate RepositoryInterface.
-	forumSvc     forum.ServiceInterface // Injected for publishing notes
-	emailSvc     email.ServiceInterface // For sending emails
-	jwtSecret    string
-	clientOrigin string // For sending activation and password reset emails (domain name)
-	adminEmail   string
+	forumSvc          forum.ServiceInterface // Injected for publishing notes
+	emailSvc          email.ServiceInterface // For sending emails
+	jwtSecret         string
+	clientOrigin      string // For sending activation and password reset emails (domain name)
+	adminEmail        string
+	googleOAuthConfig *oauth2.Config
 }
 
 func NewService(
@@ -70,15 +76,31 @@ func NewService(
 	JWTSecretFromConfig string,
 	clientOriginFromConfig string,
 	adminEmailFromConfig string,
+	googleOAuthConfig *oauth2.Config,
 ) ServiceInterface {
 	return &Service{
-		userRepo:     userRepo,
-		forumSvc:     forumSvc,
-		emailSvc:     emailSvc,
-		jwtSecret:    JWTSecretFromConfig,
-		clientOrigin: clientOriginFromConfig,
-		adminEmail:   adminEmailFromConfig,
+		userRepo:          userRepo,
+		forumSvc:          forumSvc,
+		emailSvc:          emailSvc,
+		jwtSecret:         JWTSecretFromConfig,
+		clientOrigin:      clientOriginFromConfig,
+		adminEmail:        adminEmailFromConfig,
+		googleOAuthConfig: googleOAuthConfig,
 	}
+}
+
+// A struct to unmarshal the Google user info response
+type GoogleUserInfo struct {
+	ID            string `json:"id"`
+	Email         string `json:"email"`
+	VerifiedEmail bool   `json:"verified_email"`
+	Name          string `json:"name"`
+	Picture       string `json:"picture"`
+}
+
+// Allows other packages (like the handler) to know the frontend URL for redirects.
+func (s *Service) GetClientOrigin() string {
+	return s.clientOrigin
 }
 
 func (s *Service) Signup(ctx context.Context, req models.SignupRequest) (*models.User, error) {
@@ -285,6 +307,82 @@ func (s *Service) ResetPassword(ctx context.Context, token string, newPassword s
 	}
 
 	// 4. Log the user in by issuing a JWT
+	return s.generateAuthResponse(user)
+}
+
+// HandleGoogleLogin generates the redirect URL for the user.
+func (s *Service) HandleGoogleLogin() (string, error) {
+	// Generates the URL the user should be redirected to.
+	// The state parameter is crucial for CSRF protection.
+	// It should be a random, non-guessable string.
+	// In a production app, you'd generate this, store it in a short-lived, secure,
+	// HttpOnly cookie, and then compare it in the callback handler.
+	state, err := utils.GenerateSecureToken(16)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate state for google login: %w", err)
+	}
+	// This generates a URL like:
+	// https://accounts.google.com/o/oauth2/v2/auth?client_id=...&redirect_uri=...&response_type=code&scope=...&state=...
+	url := s.googleOAuthConfig.AuthCodeURL(state)
+	return url, nil
+}
+
+// HandleGoogleCallback processes the callback from Google, completing the login/signup.
+func (s *Service) HandleGoogleCallback(ctx context.Context, code string) (*models.AuthResponse, error) {
+	// 1. Exchange authorization code for a token from Google
+	token, err := s.googleOAuthConfig.Exchange(ctx, code)
+	if err != nil {
+		return nil, fmt.Errorf("google code exchange failed: %w", err)
+	}
+
+	// 2. Use the token to get the user's info from Google's API.
+	response, err := http.Get("https://www.googleapis.com/oauth2/v2/userinfo?access_token=" + token.AccessToken)
+	if err != nil {
+		return nil, fmt.Errorf("failed getting user info from google: %w", err)
+	}
+	defer response.Body.Close()
+
+	contents, err := io.ReadAll(response.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed reading user info response body: %w", err)
+	}
+
+	var userInfo GoogleUserInfo
+	if err := json.Unmarshal(contents, &userInfo); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal user info: %w", err)
+	}
+
+	if !userInfo.VerifiedEmail {
+		return nil, fmt.Errorf("google email not verified")
+	}
+
+	// 3. Find or create user in database
+	user, err := s.userRepo.FindByEmail(ctx, userInfo.Email)
+	if err != nil && !errors.Is(err, models.ErrNotFound) {
+		return nil, fmt.Errorf("db error while finding user by email: %w", err)
+	}
+
+	if errors.Is(err, models.ErrNotFound) {
+		// User does not exist, create them
+		newUser := &models.User{
+			Nickname:       userInfo.Name,
+			Email:          userInfo.Email,
+			AvatarURL:      userInfo.Picture,
+			Role:           models.RoleNormalUser,
+			AuthProvider:   "google",
+			AuthProviderID: userInfo.ID,
+			IsActive:       true,
+		}
+		user, err = s.userRepo.CreateOAuthUser(ctx, newUser)
+		if err != nil {
+			return nil, err
+		}
+	}
+	// If the user was found, you might want to check if their AuthProvider is "email"
+	// and potentially link the Google account by setting AuthProvider and AuthProviderID.
+	// For now, we'll just log them in.
+
+	// 4. Generate our application's JWT for this user.
 	return s.generateAuthResponse(user)
 }
 

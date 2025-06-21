@@ -23,6 +23,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 )
 
 func main() {
@@ -61,6 +63,19 @@ func main() {
 	e.Logger.Info("Successfully connected to the database!")
 
 	// Dependency injection
+	// 1. Initialize Google OAuth Config
+	googleOAuthConfig := &oauth2.Config{
+		RedirectURL:  cfg.GoogleOAuthRedirectURL,
+		ClientID:     cfg.GoogleOAuthClientID,
+		ClientSecret: cfg.GoogleOAuthClientSecret,
+		Scopes: []string{
+			"https://www.googleapis.com/auth/userinfo.email",
+			"https://www.googleapis.com/auth/userinfo.profile",
+		},
+		Endpoint: google.Endpoint,
+	}
+
+	// 2. Initialize other services
 	emailService := email.NewSMTPService(
 		cfg.SMTPServer, // Assuming these are in your config
 		cfg.SMTPPort,
@@ -74,7 +89,15 @@ func main() {
 	forumHandler := forum.NewHandler(forumService)
 
 	userRepo := user.NewRepository(dbPool)
-	userService := user.NewService(userRepo, forumService, emailService, cfg.JWTSecret, cfg.ClientOrigin, cfg.AdminEmail)
+	userService := user.NewService(
+		userRepo,
+		forumService,
+		emailService,
+		cfg.JWTSecret,
+		cfg.ClientOrigin,
+		cfg.AdminEmail,
+		googleOAuthConfig,
+	)
 	userHandler := user.NewHandler(userService)
 	// You'll also need an admin handler if it's separate
 	// adminHandler := user.NewAdminHandler(userService, other admin services)

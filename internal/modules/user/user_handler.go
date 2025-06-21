@@ -2,6 +2,7 @@ package user
 
 import (
 	"errors"
+	"fmt"
 	"jingdezhen-ceramics-backend/internal/models"
 	"jingdezhen-ceramics-backend/pkg/utils"
 	"net/http"
@@ -67,6 +68,55 @@ func (h *Handler) Login(c echo.Context) error {
 	return c.JSON(http.StatusOK, authResponse)
 }
 
+// GoogleLogin initiates the Google OAuth 2.0 login flow.
+// It redirects the user to Google's consent screen.
+// Corresponds to: authGroup.GET("/google/login", userHandler.GoogleLogin)
+func (h *Handler) GoogleLogin(c echo.Context) error {
+	// The service generates the unique URL for this login attempt.
+	// This URL includes the client ID and a state parameter for security.
+	authURL, err := h.service.HandleGoogleLogin()
+	if err != nil {
+		c.Logger().Error("Handler.GoogleLogin: failed to generate auth URL: ", err)
+		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Could not initiate Google login"})
+	}
+
+	// Redirect the user's browser to the Google authentication page.
+	return c.Redirect(http.StatusTemporaryRedirect, authURL)
+}
+
+// GoogleCallback handles the callback request from Google after the user has authenticated.
+// Google redirects the user here with a `code` and `state` parameter in the URL.
+// Corresponds to: authGroup.GET("/google/callback", userHandler.GoogleCallback)
+func (h *Handler) GoogleCallback(c echo.Context) error {
+	// For a production app, you must validate the `state` parameter here against a value
+	// stored in the user's session/cookie to prevent CSRF attacks. We'll omit for simplicity.
+	// if c.QueryParam("state") != storedState {
+	//     return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: "Invalid state"})
+	// }
+
+	// Get the authorization code from the query parameters.
+	code := c.QueryParam("code")
+	if code == "" {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Authorization code not provided"})
+	}
+
+	// Call the service to exchange the code for a token, fetch user info,
+	// find or create the user, and generate our application's JWT.
+	authResponse, err := h.service.HandleGoogleCallback(c.Request().Context(), code)
+	if err != nil {
+		c.Logger().Error("Handler.GoogleCallback: service error: ", err)
+		// Redirect to a frontend error page
+		return c.Redirect(http.StatusTemporaryRedirect, fmt.Sprintf("%s/login/error", h.service.GetFrontendDomain()))
+	}
+
+	// On success, we need to get the JWT to the frontend.
+	// A common way is to redirect the user back to a specific frontend page
+	// and include the token as a query parameter.
+	// The frontend page can then parse the token from the URL and save it.
+	redirectURL := fmt.Sprintf("%s/login/success?token=%s", h.service.GetFrontendDomain(), authResponse.AccessToken)
+	return c.Redirect(http.StatusTemporaryRedirect, redirectURL)
+}
+
 func (h *Handler) ActivateAccount(c echo.Context) error {
 	var req models.ActivationRequest
 	if err := c.Bind(&req); err != nil {
@@ -113,7 +163,10 @@ func (h *Handler) ResendActivation(c echo.Context) error {
 }
 
 // RequestPasswordReset handles requests to initiate a password reset.
-// This is the initial request, not the one with the new password.
+// Two-step password reset process:
+// 1. User clicks "Forgot password", frontend sends a POST request to "auth/reset-password"
+// 2. User submits new password on frontend page "/reset-password?token=...", frontend sends a POST request with new password
+// This is the step 1
 func (h *Handler) RequestPasswordReset(c echo.Context) error {
 	var req models.RequestPasswordResetRequest
 	if err := c.Bind(&req); err != nil {
@@ -133,6 +186,41 @@ func (h *Handler) RequestPasswordReset(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]string{
 		"message": "If an account with that email address exists, a link to reset your password has been sent.",
 	})
+}
+
+// This is the step 2
+// It receives a token and a new password, validates them, and if successful,
+// logs the user in by returning a new JWT.
+func (h *Handler) ResetPassword(c echo.Context) error {
+	// 1. Bind the incoming JSON request body to our ResetPasswordRequest struct.
+	var req models.ResetPasswordRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid request body: " + err.Error()})
+	}
+
+	// 2. Validate the request data using the struct tags
+	if err := h.validate.Struct(req); err != nil {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Validation failed: " + err.Error()})
+	}
+
+	// 3. Call the corresponding service method to perform the core logic.
+	// The service will verify the token, hash the new password, update the database,
+	// and generate a new JWT.
+	authResponse, err := h.service.ResetPassword(c.Request().Context(), req.Token, req.NewPassword)
+	if err != nil {
+		// 4. Handle specific errors returned from the service layer.
+		if errors.Is(err, models.ErrInvalidToken) {
+			// This error is returned if the token doesn't exist, is expired, or is otherwise invalid.
+			return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid or expired password reset token"})
+		}
+
+		// For all other unexpected errors, log them and return a generic server error.
+		c.Logger().Error("Handler.ResetPassword: ", err)
+		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "An internal error occurred while resetting the password"})
+	}
+
+	// 5. On success, the service returns a new AuthResponse.
+	return c.JSON(http.StatusOK, authResponse)
 }
 
 // --- User Profile Routes ---
