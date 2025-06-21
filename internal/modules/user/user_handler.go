@@ -67,6 +67,74 @@ func (h *Handler) Login(c echo.Context) error {
 	return c.JSON(http.StatusOK, authResponse)
 }
 
+func (h *Handler) ActivateAccount(c echo.Context) error {
+	var req models.ActivationRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid request: missing token"})
+	}
+	if err := h.validate.Struct(req); err != nil {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: err.Error()})
+	}
+
+	// After activation, automatically log the user in by issuing a JWT
+	authResponse, err := h.service.ActivateUserAndLogin(c.Request().Context(), req.Token)
+	if err != nil {
+		if errors.Is(err, models.ErrInvalidToken) {
+			return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid or expired activation token"})
+		}
+		c.Logger().Error("Handler.ActivateAccount: ", err)
+		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to activate account"})
+	}
+
+	return c.JSON(http.StatusOK, authResponse)
+}
+
+// ResendActivation handles requests to resend an activation email.
+func (h *Handler) ResendActivation(c echo.Context) error {
+	var req models.ResendActivationRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid request: " + err.Error()})
+	}
+	if err := h.validate.Struct(req); err != nil {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Validation failed: " + err.Error()})
+	}
+
+	err := h.service.ResendActivationEmail(c.Request().Context(), req.Email)
+	if err != nil {
+		// Even if the service returns an error, don't expose it to the client
+		// to prevent email enumeration. The error is logged in the service layer.
+		c.Logger().Error("Handler.ResendActivation encountered a service error: ", err)
+	}
+
+	// Always return a generic success message to prevent attackers from discovering which emails are registered.
+	return c.JSON(http.StatusOK, map[string]string{
+		"message": "If an account with that email address exists and is not yet activated, a new activation link has been sent.",
+	})
+}
+
+// RequestPasswordReset handles requests to initiate a password reset.
+// This is the initial request, not the one with the new password.
+func (h *Handler) RequestPasswordReset(c echo.Context) error {
+	var req models.RequestPasswordResetRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid request: " + err.Error()})
+	}
+	if err := h.validate.Struct(req); err != nil {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Validation failed: " + err.Error()})
+	}
+
+	err := h.service.RequestPasswordReset(c.Request().Context(), req.Email)
+	if err != nil {
+		// As with activation, we log the error but don't expose it to the client.
+		c.Logger().Error("Handler.RequestPasswordReset encountered a service error: ", err)
+	}
+
+	// Always return a generic success message.
+	return c.JSON(http.StatusOK, map[string]string{
+		"message": "If an account with that email address exists, a link to reset your password has been sent.",
+	})
+}
+
 // --- User Profile Routes ---
 func (h *Handler) GetProfile(c echo.Context) error {
 	userID, err := utils.GetUserIDFromContext(c)

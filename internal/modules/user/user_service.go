@@ -4,17 +4,25 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"jingdezhen-ceramics-backend/internal/forum" // For publishing notes
 	"jingdezhen-ceramics-backend/internal/models"
+	"jingdezhen-ceramics-backend/internal/modules/forum" // For publishing notes
 	"jingdezhen-ceramics-backend/pkg/email"
-	// "golang.org/x/crypto/bcrypt" // If handling password hashing here
-	"log" // For contact form simulation
+	"jingdezhen-ceramics-backend/pkg/utils"
+	"log"
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // ServiceInterface defines methods for user business logic.
 type ServiceInterface interface {
-	Signup(ctx context.Context, req models.SignupRequest) (*models.AuthResponse, error)
+	Signup(ctx context.Context, req models.SignupRequest) (*models.User, error)
+	ActivateUserAndLogin(ctx context.Context, token string) (*models.AuthResponse, error)
 	Login(ctx context.Context, req models.LoginRequest) (*models.AuthResponse, error)
+	ResendActivationEmail(ctx context.Context, email string) error
+	RequestPasswordReset(ctx context.Context, email string) error
+	ResetPassword(ctx context.Context, token string, newPassword string) (*models.AuthResponse, error)
 
 	GetUserProfile(ctx context.Context, userID string) (*models.User, error)
 	UpdateUserProfile(ctx context.Context, userID string, data models.UserUpdateData) (*models.User, error)
@@ -48,26 +56,32 @@ type Service struct {
 	userRepo RepositoryInterface
 	// For simplicity, userNote specific methods are on RepositoryInterface for now.
 	// In a larger system, userNoteRepo might be a separate RepositoryInterface.
-	forumSvc   forum.ServiceInterface // Injected for publishing notes
-	emailSvc   email.ServiceInterface // For sending contact emails
-	adminEmail string
+	forumSvc     forum.ServiceInterface // Injected for publishing notes
+	emailSvc     email.ServiceInterface // For sending emails
+	jwtSecret    string
+	clientOrigin string // For sending activation and password reset emails (domain name)
+	adminEmail   string
 }
 
 func NewService(
 	userRepo RepositoryInterface,
 	forumSvc forum.ServiceInterface,
 	emailSvc email.ServiceInterface,
+	JWTSecretFromConfig string,
+	clientOriginFromConfig string,
 	adminEmailFromConfig string,
 ) ServiceInterface {
 	return &Service{
-		userRepo:   userRepo,
-		forumSvc:   forumSvc,
-		emailSvc:   emailSvc,
-		adminEmail: adminEmailFromConfig,
+		userRepo:     userRepo,
+		forumSvc:     forumSvc,
+		emailSvc:     emailSvc,
+		jwtSecret:    JWTSecretFromConfig,
+		clientOrigin: clientOriginFromConfig,
+		adminEmail:   adminEmailFromConfig,
 	}
 }
 
-func (s *Service) Signup(ctx context.Context, req models.SignupRequest) (*models.AuthResponse, error) {
+func (s *Service) Signup(ctx context.Context, req models.SignupRequest) (*models.User, error) {
 	// 1. Check if user with that email already exists
 	_, err := s.userRepo.FindByEmail(ctx, req.Email)
 	if err != nil && !errors.Is(err, models.ErrNotFound) {
@@ -85,30 +99,63 @@ func (s *Service) Signup(ctx context.Context, req models.SignupRequest) (*models
 		return nil, fmt.Errorf("service.Signup.HashPassword: %w", err)
 	}
 
-	// 3. Create the user in the database
+	// 3. Create activation token
+	activationToken, err := utils.GenerateSecureToken(32)
+	if err != nil {
+		return nil, fmt.Errorf("service.Signup.GenerateToken: %w", err)
+	}
+	expiresAt := time.Now().Add(time.Minute * 30)
+
+	// 4. Create the inactive user in the database
 	newUser := &models.User{
 		Nickname: req.Nickname,
 		Email:    req.Email,
 		Role:     models.RoleNormalUser, // Default role
 	}
-	createdUser, err := s.userRepo.Create(ctx, newUser, string(hashedPassword))
+	createdUser, err := s.userRepo.CreateInactiveUser(ctx, newUser, string(hashedPassword), activationToken, expiresAt)
 	if err != nil {
 		return nil, fmt.Errorf("service.Signup.CreateUser: %w", err)
 	}
 
-	// 4. Generate a JWT for the new user
-	// This would call a JWT utility/service you create
-	accessToken, err := s.jwtService.GenerateToken(createdUser.ID, createdUser.Email, createdUser.Role)
+	// 5. Send activation email
+	activationURL := fmt.Sprintf("%s/activate?token=%s", s.clientOrigin, activationToken, expiresAt)
+	emailSubject := "Welcome! Please Activate Your Account"
+	emailBody := fmt.Sprintf("Thank you for registering! Please click the following link in 30 minutes to activate your account: %s", activationURL)
+	err = s.emailSvc.SendEmail(ctx, []string{createdUser.Email}, emailSubject, "", emailBody)
 	if err != nil {
-		return nil, fmt.Errorf("service.Signup.GenerateToken: %w", err)
+		log.Printf("ERROR: Failed to send activation email to %s: %v", createdUser.Email, err)
 	}
 
-	// 5. Return the response
-	authResponse := &models.AuthResponse{
-		AccessToken: accessToken,
-		User:        createdUser,
+	return createdUser, nil
+}
+
+// private helper function to generate AuthResponse
+func (s *Service) generateAuthResponse(user *models.User) (*models.AuthResponse, error) {
+	// 1. Create claims for JWT
+	claims := &models.JwtCustomClaims{
+		UserID: user.ID,
+		Email:  user.Email,
+		Role:   user.Role,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour * 24 * 30)), // 1 month expiry
+		},
 	}
-	return authResponse, nil
+
+	// 2. Create access token with claims
+	accessToken := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+
+	// 3. Generate encoded token and send it as response
+	tokenSignedString, err := accessToken.SignedString([]byte(s.jwtSecret))
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign access token: %w", err)
+	}
+
+	user.PasswordHash = "" // Do NOT send sensitive info back
+
+	return &models.AuthResponse{
+		AccessToken: tokenSignedString,
+		User:        user,
+	}, nil
 }
 
 func (s *Service) Login(ctx context.Context, req models.LoginRequest) (*models.AuthResponse, error) {
@@ -128,20 +175,119 @@ func (s *Service) Login(ctx context.Context, req models.LoginRequest) (*models.A
 		return nil, models.ErrInvalidCredentials
 	}
 
-	// 3. Generate JWT
-	accessToken, err := s.jwtService.GenerateToken(userWithHash.ID, userWithHash.Email, userWithHash.Role)
+	// 3. Use helper function to generate JWT and AuthResponse
+	return s.generateAuthResponse(userWithHash)
+}
+
+func (s *Service) ActivateUserAndLogin(ctx context.Context, token string) (*models.AuthResponse, error) {
+	activatedUser, err := s.userRepo.ActivateUser(ctx, token)
 	if err != nil {
-		return nil, fmt.Errorf("service.Login.GenerateToken: %w", err)
+		return nil, fmt.Errorf("service.ActivateUserAndLogin: %w", err)
 	}
 
-	// 4. Return the response (without the password hash!)
-	userWithHash.PasswordHash = "" // Clear sensitive info
-	authResponse := &models.AuthResponse{
-		AccessToken: accessToken,
-		User:        &userWithHash.User,
-	}
-	return authResponse, nil
+	return s.generateAuthResponse(activatedUser)
 }
+
+func (s *Service) ResendActivationEmail(ctx context.Context, email string) error {
+	// 1. Find user by email
+	user, err := s.userRepo.FindByEmail(ctx, email)
+	if err != nil {
+		// If user not found, do nothing and return nil to hide existence.
+		if errors.Is(err, models.ErrNotFound) {
+			log.Printf("INFO: Activation resend requested for non-existent email: %s", email)
+			return nil
+		}
+		return fmt.Errorf("service.ResendActivationEmail.FindByEmail: %w", err)
+	}
+
+	// 2. Check if user is already active
+	if user.IsActive {
+		log.Printf("INFO: Activation resend requested for already active user: %s", email)
+		return nil // Do nothing, don't signal that they are active.
+	}
+
+	// 3. Generate a new activation token
+	activationToken, err := utils.GenerateSecureToken(32)
+	if err != nil {
+		return fmt.Errorf("service.ResendActivationEmail.GenerateToken: %w", err)
+	}
+	expiresAt := time.Now().Add(time.Minute * 30)
+
+	// 4. Update the user record with the new token
+	if err := s.userRepo.UpdateActivationToken(ctx, user.ID, activationToken, expiresAt); err != nil {
+		return fmt.Errorf("service.ResendActivationEmail.UpdateToken: %w", err)
+	}
+
+	// 5. Send the new activation email
+	activationURL := fmt.Sprintf("%s/activate?token=%s", s.clientOrigin, activationToken)
+	emailSubject := "Activate Your Account (New Link)"
+	emailBody := fmt.Sprintf("Please click the following link in 30 minutes to activate your account: %s", activationURL)
+	if err := s.emailSvc.SendEmail(ctx, []string{user.Email}, emailSubject, "", emailBody); err != nil {
+		// Log the error but don't return it to the handler, as the token was already updated.
+		// This is a situation where background retries would be ideal.
+		log.Printf("ERROR: Failed to send re-activation email to %s: %v", user.Email, err)
+	}
+
+	return nil
+}
+
+func (s *Service) RequestPasswordReset(ctx context.Context, email string) error {
+	// 1. Find user by email
+	user, err := s.userRepo.FindByEmail(ctx, email)
+	if err != nil {
+		// Even if user not found, return success to prevent email enumeration attacks
+		log.Printf("Password reset requested for non-existent email: %s", err)
+		return nil
+	}
+
+	// 2. Gnerate reset token and expiry
+	token, err := utils.GenerateSecureToken(32)
+	if err != nil {
+		return err
+	}
+	expiresAt := time.Now().Add(15 * time.Minute) // token is valid for 15 minutes
+
+	// 3. Save token and expiry to user record
+	if err := s.userRepo.SetPasswordResetToken(ctx, user.ID, token, expiresAt); err != nil {
+		return err
+	}
+
+	// 4. Send password reset email
+	resetURL := fmt.Sprintf("%s/reset-password?token=%s", s.clientOrigin, token)
+	emailSubject := "Reset Your Password"
+	emailBody := fmt.Sprintf("Please click the following link in 15 minutes to reset your password: %s", resetURL)
+	err = s.emailSvc.SendEmail(ctx, []string{user.Email}, emailSubject, "", emailBody)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *Service) ResetPassword(ctx context.Context, token string, newPassword string) (*models.AuthResponse, error) {
+	// 1. Find user by reset token and check expiry
+	// Read and Security Check: verify the token matches AND has not expired
+	user, err := s.userRepo.FindByPasswordResetToken(ctx, token)
+	if err != nil {
+		return nil, models.ErrInvalidToken // Token not found or expired
+	}
+
+	// 2. Hash the new password
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. Update the user's password and clear the reset token
+	// Write and State Change: update users table in database
+	if err := s.userRepo.UpdatePasswordAndClearResetToken(ctx, user.ID, string(hashedPassword)); err != nil {
+		return nil, err
+	}
+
+	// 4. Log the user in by issuing a JWT
+	return s.generateAuthResponse(user)
+}
+
 func (s *Service) GetUserProfile(ctx context.Context, userID string) (*models.User, error) {
 	user, err := s.userRepo.FindByID(ctx, userID)
 	if err != nil {
@@ -183,7 +329,7 @@ func (s *Service) HandleContactSubmission(ctx context.Context, data models.Conta
 	)
 
 	// 2. Send an email to the admin using an email service
-	err := s.emailSvc.SendEmail(ctx, adminEmail, emailSubject, emailBody)
+	err := s.emailSvc.SendEmail(ctx, []string{adminEmail}, emailSubject, "", emailBody)
 	if err != nil {
 		log.Printf("ERROR sending contact email: %v", err)
 		// Decide if this should be a user-facing error or just logged

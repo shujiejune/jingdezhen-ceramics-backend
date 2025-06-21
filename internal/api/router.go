@@ -2,13 +2,13 @@ package api
 
 import (
 	"jingdezhen-ceramics-backend/internal/api/middleware"
-	"jingdezhen-ceramics-backend/internal/ceramicstory"
-	"jingdezhen-ceramics-backend/internal/course"
-	"jingdezhen-ceramics-backend/internal/engage"
-	"jingdezhen-ceramics-backend/internal/forum"
-	"jingdezhen-ceramics-backend/internal/gallery"
-	"jingdezhen-ceramics-backend/internal/portfolio"
-	"jingdezhen-ceramics-backend/internal/user"
+	"jingdezhen-ceramics-backend/internal/modules/ceramicstory"
+	"jingdezhen-ceramics-backend/internal/modules/course"
+	"jingdezhen-ceramics-backend/internal/modules/engage"
+	"jingdezhen-ceramics-backend/internal/modules/forum"
+	"jingdezhen-ceramics-backend/internal/modules/gallery"
+	"jingdezhen-ceramics-backend/internal/modules/portfolio"
+	"jingdezhen-ceramics-backend/internal/modules/user"
 	"net/http"
 
 	"github.com/labstack/echo/v4"
@@ -37,8 +37,8 @@ func SetupRoutes(
 	{
 		authGroup.POST("/signup", userHandler.Signup)
 		authGroup.POST("/login", userHandler.Login)
-		authGroup.PUT("logout", userHandler.Logout)
-		authGroup.PUT("reset-password", userHandler.ResetPassword)
+		authGroup.POST("/activate", userHandler.ActivateAccount)
+		authGroup.POST("reset-password", userHandler.RequestPasswordReset)
 	}
 
 	/* --- User Profile (Protected) --- */

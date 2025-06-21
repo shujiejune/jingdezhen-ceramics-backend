@@ -10,14 +10,14 @@ import (
 	"time"
 
 	"jingdezhen-ceramics-backend/internal/api"
-	"jingdezhen-ceramics-backend/internal/ceramicstory"
-	"jingdezhen-ceramics-backend/internal/config"
-	"jingdezhen-ceramics-backend/internal/course"
-	"jingdezhen-ceramics-backend/internal/engage"
-	"jingdezhen-ceramics-backend/internal/forum"
-	"jingdezhen-ceramics-backend/internal/gallery"
-	"jingdezhen-ceramics-backend/internal/portfolio"
-	"jingdezhen-ceramics-backend/internal/user"
+	"jingdezhen-ceramics-backend/internal/modules/ceramicstory"
+	"jingdezhen-ceramics-backend/internal/modules/config"
+	"jingdezhen-ceramics-backend/internal/modules/course"
+	"jingdezhen-ceramics-backend/internal/modules/engage"
+	"jingdezhen-ceramics-backend/internal/modules/forum"
+	"jingdezhen-ceramics-backend/internal/modules/gallery"
+	"jingdezhen-ceramics-backend/internal/modules/portfolio"
+	"jingdezhen-ceramics-backend/internal/modules/user"
 	"jingdezhen-ceramics-backend/pkg/email"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -74,7 +74,7 @@ func main() {
 	forumHandler := forum.NewHandler(forumService)
 
 	userRepo := user.NewRepository(dbPool)
-	userService := user.NewService(userRepo, forumService, emailService, cfg.AdminEmail)
+	userService := user.NewService(userRepo, forumService, emailService, cfg.JWTSecret, cfg.ClientOrigin, cfg.AdminEmail)
 	userHandler := user.NewHandler(userService)
 	// You'll also need an admin handler if it's separate
 	// adminHandler := user.NewAdminHandler(userService, other admin services)
