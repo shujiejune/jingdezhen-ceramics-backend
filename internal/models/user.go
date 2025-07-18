@@ -22,7 +22,7 @@ type User struct {
 	Email          string       `json:"email" db:"email"`
 	PasswordHash   string       `json:"-" db:"password_hash"`
 	Role           string       `json:"role" db:"role"`
-	AvatarURL      string       `json:"avatar_url,omitempty" db:"avatar_url"`
+	AvatarURL      *string      `json:"avatar_url,omitempty" db:"avatar_url"`
 	ProfileData    *ProfileData `json:"profile_data,omitempty" db:"profile_data"`
 	AuthProvider   string       `json:"auth_provider" db:"auth_provider"`
 	AuthProviderID string       `json:"-" db:"auth_provider_id"`

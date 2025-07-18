@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"jingdezhen-ceramics-backend/internal/models"
-	"jingdezhen-ceramics-backend/internal/modules/forum" // For publishing notes
+	"jingdezhen-ceramics-backend/internal/modules/forum"
 	"jingdezhen-ceramics-backend/pkg/email"
 	"jingdezhen-ceramics-backend/pkg/utils"
 	"log"
@@ -17,15 +17,16 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
 )
 
 // ServiceInterface defines methods for user business logic.
 type ServiceInterface interface {
 	Signup(ctx context.Context, req models.SignupRequest) (*models.User, error)
 	ActivateUserAndLogin(ctx context.Context, token string) (*models.AuthResponse, error)
-	Login(ctx context.Context, req models.LoginRequest) (*models.AuthResponse, error)
 	ResendActivationEmail(ctx context.Context, email string) error
+	Login(ctx context.Context, req models.LoginRequest) (*models.AuthResponse, error)
+	HandleGoogleLogin() (string, string, error)
+	HandleGoogleCallback(ctx context.Context, code string) (*models.AuthResponse, error)
 	RequestPasswordReset(ctx context.Context, email string) error
 	ResetPassword(ctx context.Context, token string, newPassword string) (*models.AuthResponse, error)
 
@@ -180,27 +181,6 @@ func (s *Service) generateAuthResponse(user *models.User) (*models.AuthResponse,
 	}, nil
 }
 
-func (s *Service) Login(ctx context.Context, req models.LoginRequest) (*models.AuthResponse, error) {
-	// 1. Find user by email
-	userWithHash, err := s.userRepo.FindByEmail(ctx, req.Email) // This needs to return password hash
-	if err != nil {
-		if errors.Is(err, models.ErrNotFound) {
-			return nil, models.ErrInvalidCredentials
-		}
-		return nil, fmt.Errorf("service.Login.FindByEmail: %w", err)
-	}
-
-	// 2. Compare the provided password with the stored hash
-	err = bcrypt.CompareHashAndPassword([]byte(userWithHash.PasswordHash), []byte(req.Password))
-	if err != nil {
-		// Passwords don't match
-		return nil, models.ErrInvalidCredentials
-	}
-
-	// 3. Use helper function to generate JWT and AuthResponse
-	return s.generateAuthResponse(userWithHash)
-}
-
 func (s *Service) ActivateUserAndLogin(ctx context.Context, token string) (*models.AuthResponse, error) {
 	activatedUser, err := s.userRepo.ActivateUser(ctx, token)
 	if err != nil {
@@ -251,6 +231,27 @@ func (s *Service) ResendActivationEmail(ctx context.Context, email string) error
 	}
 
 	return nil
+}
+
+func (s *Service) Login(ctx context.Context, req models.LoginRequest) (*models.AuthResponse, error) {
+	// 1. Find user by email
+	userWithHash, err := s.userRepo.FindByEmail(ctx, req.Email) // This needs to return password hash
+	if err != nil {
+		if errors.Is(err, models.ErrNotFound) {
+			return nil, models.ErrInvalidCredentials
+		}
+		return nil, fmt.Errorf("service.Login.FindByEmail: %w", err)
+	}
+
+	// 2. Compare the provided password with the stored hash
+	err = bcrypt.CompareHashAndPassword([]byte(userWithHash.PasswordHash), []byte(req.Password))
+	if err != nil {
+		// Passwords don't match
+		return nil, models.ErrInvalidCredentials
+	}
+
+	// 3. Use helper function to generate JWT and AuthResponse
+	return s.generateAuthResponse(userWithHash)
 }
 
 func (s *Service) RequestPasswordReset(ctx context.Context, email string) error {
@@ -367,7 +368,7 @@ func (s *Service) HandleGoogleCallback(ctx context.Context, code string) (*model
 		newUser := &models.User{
 			Nickname:       userInfo.Name,
 			Email:          userInfo.Email,
-			AvatarURL:      userInfo.Picture,
+			AvatarURL:      &userInfo.Picture,
 			Role:           models.RoleNormalUser,
 			AuthProvider:   "google",
 			AuthProviderID: userInfo.ID,
