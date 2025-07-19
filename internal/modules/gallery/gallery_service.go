@@ -1,0 +1,120 @@
+package gallery
+
+import (
+	"context"
+	"fmt"
+	"jingdezhen-ceramics-backend/internal/models"
+	"jingdezhen-ceramics-backend/internal/user" // For creating notes
+)
+
+type ServiceInterface interface {
+	GetArtworks(ctx context.Context, userID string, filters models.ArtworkFilters) ([]models.Artwork, int, error)
+	GetArtworkByID(ctx context.Context, userID string, artworkID int64) (*models.Artwork, error)
+	GetArtists(ctx context.Context, page, limit int) ([]models.Artist, int, error)
+	GetArtistByID(ctx context.Context, artistID int64) (*models.Artist, error)
+	GetGalleryCategories(ctx context.Context) ([]string, error)
+	MarkAsFavorite(ctx context.Context, userID string, artworkID int64) error
+	UnmarkAsFavorite(ctx context.Context, userID string, artworkID int64) error
+	AddNoteToArtwork(ctx context.Context, userID string, artworkID int64, data models.AddNoteToArtworkRequest) (*models.UserNote, error)
+}
+
+type Service struct {
+	repo    RepositoryInterface
+	userSvc user.ServiceInterface // Dependency for creating notes
+}
+
+func NewService(repo RepositoryInterface, userSvc user.ServiceInterface) ServiceInterface {
+	return &Service{repo: repo, userSvc: userSvc}
+}
+
+func (s *Service) GetArtworks(ctx context.Context, userID string, filters models.ArtworkFilters) ([]models.Artwork, int, error) {
+	artworks, total, err := s.repo.FindAllArtworks(ctx, filters)
+	if err != nil {
+		return nil, 0, fmt.Errorf("service.GetArtworks: %w", err)
+	}
+
+	if len(artworks) > 0 && userID != "" {
+		artworkIDs := make([]int64, len(artworks))
+		for i, art := range artworks {
+			artworkIDs[i] = art.ID
+		}
+		favoriteMap, err := s.repo.CheckFavorites(ctx, userID, artworkIDs)
+		if err != nil {
+			return nil, 0, fmt.Errorf("service.GetArtworks.CheckFavorites: %w", err)
+		}
+		for i := range artworks {
+			if favoriteMap[artworks[i].ID] {
+				artworks[i].IsFavorite = true
+			}
+		}
+	}
+
+	return artworks, total, nil
+}
+
+func (s *Service) GetArtworkByID(ctx context.Context, userID string, artworkID int64) (*models.Artwork, error) {
+	artwork, err := s.repo.FindArtworkByID(ctx, artworkID)
+	if err != nil {
+		return nil, fmt.Errorf("service.GetArtworkByID: %w", err)
+	}
+
+	// Fetch related data
+	images, err := s.repo.GetArtworkImages(ctx, artworkID)
+	if err != nil { /* log error but don't fail the whole request */
+	}
+	artwork.Images = images
+
+	tags, err := s.repo.GetArtworkTags(ctx, artworkID)
+	if err != nil { /* log error */
+	}
+	artwork.Tags = tags
+
+	if userID != "" {
+		favoriteMap, err := s.repo.CheckFavorites(ctx, userID, []int64{artworkID})
+		if err != nil { /* log error */
+		}
+		if favoriteMap[artworkID] {
+			artwork.IsFavorite = true
+		}
+	}
+
+	return artwork, nil
+}
+
+func (s *Service) GetArtists(ctx context.Context, page, limit int) ([]models.Artist, int, error) {
+	return s.repo.FindAllArtists(ctx, page, limit)
+}
+func (s *Service) GetArtistByID(ctx context.Context, artistID int64) (*models.Artist, error) {
+	return s.repo.FindArtistByID(ctx, artistID)
+}
+func (s *Service) GetGalleryCategories(ctx context.Context) ([]string, error) {
+	return s.repo.FindAllCategories(ctx)
+}
+
+func (s *Service) MarkAsFavorite(ctx context.Context, userID string, artworkID int64) error {
+	// Business logic: check if artwork exists first?
+	// For simplicity, we let the DB foreign key handle this.
+	return s.repo.AddFavorite(ctx, userID, artworkID)
+}
+
+func (s *Service) UnmarkAsFavorite(ctx context.Context, userID string, artworkID int64) error {
+	return s.repo.RemoveFavorite(ctx, userID, artworkID)
+}
+
+func (s *Service) AddNoteToArtwork(ctx context.Context, userID string, artworkID int64, data models.AddNoteToArtworkRequest) (*models.UserNote, error) {
+	// Business logic: First, verify the artwork actually exists.
+	_, err := s.repo.FindArtworkByID(ctx, artworkID)
+	if err != nil {
+		return nil, fmt.Errorf("cannot add note to non-existent artwork: %w", err)
+	}
+
+	// Delegate note creation to the user service.
+	noteData := models.CreateUserNoteData{
+		Title:      data.Title,
+		Content:    data.Content,
+		EntityType: "artwork",
+		EntityID:   int(artworkID), // Cast int64 to int
+	}
+
+	return s.userSvc.CreateUserNote(ctx, userID, noteData)
+}

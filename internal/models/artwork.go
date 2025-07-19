@@ -62,3 +62,17 @@ type UserFavArtworkEntry struct {
 	Artwork     Artwork   `json:"artwork"`
 	FavoritedAt time.Time `json:"favorited_at"`
 }
+
+// AddNoteToArtworkRequest defines the request body for adding a note to an artwork.
+type AddNoteToArtworkRequest struct {
+	Title   string `json:"title" validate:"required,max=255"`
+	Content string `json:"content" validate:"required"`
+}
+
+// ArtworkFilters defines the available query parameters for filtering artworks.
+type ArtworkFilters struct {
+	Category string
+	ArtistID int64
+	Page     int
+	Limit    int
+}
