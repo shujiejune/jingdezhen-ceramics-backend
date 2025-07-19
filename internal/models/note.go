@@ -23,7 +23,7 @@ type UserNoteLink struct {
 	UserNoteID           int       `json:"user_note_id" db:"user_note_id"`
 	LinkedEntityType     string    `json:"linked_entity_type" db:"linked_entity_type"`
 	LinkedEntityIDInt    *int      `json:"linked_entity_id_int,omitempty" db:"linked_entity_id_int"`
-	LinkedEntityIDUUID   *string   `json:"linked_entity_id_uuid,omitempty" db:"linked_entity_id_uuid"` // Assuming UUIDs are strings
+	LinkedEntityIDUUID   *string   `json:"linked_entity_id_uuid,omitempty" db:"linked_entity_id_uuid"`
 	LinkedEntityIDString *string   `json:"linked_entity_id_string,omitempty" db:"linked_entity_id_string"`
 	LinkDescription      string    `json:"link_description,omitempty" db:"link_description"`
 	CreatedAt            time.Time `json:"created_at" db:"created_at"`

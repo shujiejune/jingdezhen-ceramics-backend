@@ -8,7 +8,7 @@ import (
 	"io"
 	"jingdezhen-ceramics-backend/internal/models"
 	"jingdezhen-ceramics-backend/internal/modules/forum"
-	"jingdezhen-ceramics-backend/pkg/email"
+	emailSvc "jingdezhen-ceramics-backend/pkg/email"
 	"jingdezhen-ceramics-backend/pkg/utils"
 	"log"
 	"net/http"
@@ -21,6 +21,8 @@ import (
 
 // ServiceInterface defines methods for user business logic.
 type ServiceInterface interface {
+	GetClientOrigin() string
+
 	Signup(ctx context.Context, req models.SignupRequest) (*models.User, error)
 	ActivateUserAndLogin(ctx context.Context, token string) (*models.AuthResponse, error)
 	ResendActivationEmail(ctx context.Context, email string) error
@@ -62,8 +64,9 @@ type Service struct {
 	userRepo RepositoryInterface
 	// For simplicity, userNote specific methods are on RepositoryInterface for now.
 	// In a larger system, userNoteRepo might be a separate RepositoryInterface.
-	forumSvc          forum.ServiceInterface // Injected for publishing notes
-	emailSvc          email.ServiceInterface // For sending emails
+	forumSvc          forum.ServiceInterface    // Injected for publishing notes
+	emailer           emailSvc.ServiceInterface // For sending emails
+	templateManager   *emailSvc.TemplateManager
 	jwtSecret         string
 	clientOrigin      string // For sending activation and password reset emails (domain name)
 	adminEmail        string
@@ -73,7 +76,8 @@ type Service struct {
 func NewService(
 	userRepo RepositoryInterface,
 	forumSvc forum.ServiceInterface,
-	emailSvc email.ServiceInterface,
+	emailer emailSvc.ServiceInterface,
+	tm *emailSvc.TemplateManager,
 	JWTSecretFromConfig string,
 	clientOriginFromConfig string,
 	adminEmailFromConfig string,
@@ -82,7 +86,8 @@ func NewService(
 	return &Service{
 		userRepo:          userRepo,
 		forumSvc:          forumSvc,
-		emailSvc:          emailSvc,
+		emailer:           emailer,
+		templateManager:   tm,
 		jwtSecret:         JWTSecretFromConfig,
 		clientOrigin:      clientOriginFromConfig,
 		adminEmail:        adminEmailFromConfig,
@@ -128,6 +133,7 @@ func (s *Service) Signup(ctx context.Context, req models.SignupRequest) (*models
 		return nil, fmt.Errorf("service.Signup.GenerateToken: %w", err)
 	}
 	expiresAt := time.Now().Add(time.Minute * 30)
+	log.Println("GENERATED ACTIVATION TOKEN:", activationToken)
 
 	// 4. Create the inactive user in the database
 	newUser := &models.User{
@@ -142,12 +148,27 @@ func (s *Service) Signup(ctx context.Context, req models.SignupRequest) (*models
 
 	// 5. Send activation email
 	activationURL := fmt.Sprintf("%s/activate?token=%s", s.clientOrigin, activationToken, expiresAt)
-	emailSubject := "Welcome! Please Activate Your Account"
-	emailBody := fmt.Sprintf("Thank you for registering! Please click the following link in 30 minutes to activate your account: %s", activationURL)
-	err = s.emailSvc.SendEmail(ctx, []string{createdUser.Email}, emailSubject, "", emailBody)
+
+	htmlContent, err := s.templateManager.GenerateActivateAccountEmailHTML(emailSvc.TemplateData{
+		Name: createdUser.Nickname,
+		Link: activationURL,
+	})
 	if err != nil {
-		log.Printf("ERROR: Failed to send activation email to %s: %v", createdUser.Email, err)
+		// Log the error but don't fail the whole signup process
+		log.Printf("Failed to generate activation email HTML: %v", err)
+		return createdUser, nil
 	}
+
+	emailSubject := "[Circuit] Welcome! Please Activate Your Account"
+	plainTextContent := fmt.Sprintf("Thank you for signing up! Please click the following link in 30 minutes to activate your account: %s", activationURL)
+
+	go func() {
+		// Run in a goroutine so it doesn't block the user's signup response
+		err := s.emailer.SendEmail(context.Background(), createdUser.Email, emailSubject, plainTextContent, htmlContent)
+		if err != nil {
+			log.Printf("Failed to send activation email to %s: %v", createdUser.Email, err)
+		}
+	}()
 
 	return createdUser, nil
 }
@@ -173,7 +194,7 @@ func (s *Service) generateAuthResponse(user *models.User) (*models.AuthResponse,
 		return nil, fmt.Errorf("failed to sign access token: %w", err)
 	}
 
-	user.PasswordHash = "" // Do NOT send sensitive info back
+	user.PasswordHash = nil
 
 	return &models.AuthResponse{
 		AccessToken: tokenSignedString,
@@ -222,13 +243,27 @@ func (s *Service) ResendActivationEmail(ctx context.Context, email string) error
 
 	// 5. Send the new activation email
 	activationURL := fmt.Sprintf("%s/activate?token=%s", s.clientOrigin, activationToken)
-	emailSubject := "Activate Your Account (New Link)"
-	emailBody := fmt.Sprintf("Please click the following link in 30 minutes to activate your account: %s", activationURL)
-	if err := s.emailSvc.SendEmail(ctx, []string{user.Email}, emailSubject, "", emailBody); err != nil {
-		// Log the error but don't return it to the handler, as the token was already updated.
-		// This is a situation where background retries would be ideal.
-		log.Printf("ERROR: Failed to send re-activation email to %s: %v", user.Email, err)
+
+	htmlContent, err := s.templateManager.GenerateActivateAccountEmailHTML(emailSvc.TemplateData{
+		Name: user.Nickname,
+		Link: activationURL,
+	})
+	if err != nil {
+		// Log the error but don't fail the whole signup process
+		log.Printf("Failed to generate re-activation email HTML: %v", err)
+		return nil
 	}
+
+	emailSubject := "[Jingdezhen Ceramics] Activate Your Account (New Link)"
+	plainTextContent := fmt.Sprintf("Please click the following link in 30 minutes to activate your account: %s", activationURL)
+
+	go func() {
+		// Run in a goroutine so it doesn't block the user's signup response
+		err := s.emailer.SendEmail(context.Background(), email, emailSubject, plainTextContent, htmlContent)
+		if err != nil {
+			log.Printf("Failed to send re-activation email to %s: %v", email, err)
+		}
+	}()
 
 	return nil
 }
@@ -244,13 +279,23 @@ func (s *Service) Login(ctx context.Context, req models.LoginRequest) (*models.A
 	}
 
 	// 2. Compare the provided password with the stored hash
-	err = bcrypt.CompareHashAndPassword([]byte(userWithHash.PasswordHash), []byte(req.Password))
+	if userWithHash.PasswordHash == nil {
+		// This user was created via OAuth and has no password.
+		return nil, models.ErrInvalidCredentials
+	}
+
+	err = bcrypt.CompareHashAndPassword([]byte(*userWithHash.PasswordHash), []byte(req.Password))
 	if err != nil {
 		// Passwords don't match
 		return nil, models.ErrInvalidCredentials
 	}
 
-	// 3. Use helper function to generate JWT and AuthResponse
+	// 3. Check if the user is active
+	if !userWithHash.IsActive {
+		return nil, models.ErrInactiveAccount
+	}
+
+	// 4. Use helper function to generate JWT and AuthResponse
 	return s.generateAuthResponse(userWithHash)
 }
 
@@ -269,6 +314,7 @@ func (s *Service) RequestPasswordReset(ctx context.Context, email string) error 
 		return err
 	}
 	expiresAt := time.Now().Add(15 * time.Minute) // token is valid for 15 minutes
+	log.Println("GENERATE RESET PASSWORD TOKEN: ", token)
 
 	// 3. Save token and expiry to user record
 	if err := s.userRepo.SetPasswordResetToken(ctx, user.ID, token, expiresAt); err != nil {
@@ -277,12 +323,27 @@ func (s *Service) RequestPasswordReset(ctx context.Context, email string) error 
 
 	// 4. Send password reset email
 	resetURL := fmt.Sprintf("%s/reset-password?token=%s", s.clientOrigin, token)
-	emailSubject := "Reset Your Password"
-	emailBody := fmt.Sprintf("Please click the following link in 15 minutes to reset your password: %s", resetURL)
-	err = s.emailSvc.SendEmail(ctx, []string{user.Email}, emailSubject, "", emailBody)
+
+	htmlContent, err := s.templateManager.GenerateResetPasswordEmailHTML(emailSvc.TemplateData{
+		Name: user.Nickname,
+		Link: resetURL,
+	})
 	if err != nil {
-		return err
+		// Log the error but don't fail the whole signup process
+		log.Printf("Failed to generate re-activation email HTML: %v", err)
+		return nil
 	}
+
+	emailSubject := "[Jingdezhen Ceramics] Reset Your Password"
+	plainTextContent := fmt.Sprintf("Please click the following link in 15 minutes to reset your password: %s", resetURL)
+
+	go func() {
+		// Run in a goroutine so it doesn't block the user's signup response
+		err := s.emailer.SendEmail(context.Background(), email, emailSubject, plainTextContent, htmlContent)
+		if err != nil {
+			log.Printf("Failed to send password resetting email to %s: %v", email, err)
+		}
+	}()
 
 	return nil
 }
@@ -292,7 +353,10 @@ func (s *Service) ResetPassword(ctx context.Context, token string, newPassword s
 	// Read and Security Check: verify the token matches AND has not expired
 	user, err := s.userRepo.FindByPasswordResetToken(ctx, token)
 	if err != nil {
-		return nil, models.ErrInvalidToken // Token not found or expired
+		if errors.Is(err, models.ErrInvalidToken) {
+			return nil, models.ErrInvalidToken // Token not found or expired
+		}
+		return nil, fmt.Errorf("service.ResetPassword.FindToken: %w", err)
 	}
 
 	// 2. Hash the new password
@@ -312,7 +376,7 @@ func (s *Service) ResetPassword(ctx context.Context, token string, newPassword s
 }
 
 // HandleGoogleLogin generates the redirect URL for the user.
-func (s *Service) HandleGoogleLogin() (string, error) {
+func (s *Service) HandleGoogleLogin() (string, string, error) {
 	// Generates the URL the user should be redirected to.
 	// The state parameter is crucial for CSRF protection.
 	// It should be a random, non-guessable string.
@@ -320,12 +384,12 @@ func (s *Service) HandleGoogleLogin() (string, error) {
 	// HttpOnly cookie, and then compare it in the callback handler.
 	state, err := utils.GenerateSecureToken(16)
 	if err != nil {
-		return "", fmt.Errorf("failed to generate state for google login: %w", err)
+		return "", "", fmt.Errorf("failed to generate state for google login: %w", err)
 	}
 	// This generates a URL like:
 	// https://accounts.google.com/o/oauth2/v2/auth?client_id=...&redirect_uri=...&response_type=code&scope=...&state=...
 	url := s.googleOAuthConfig.AuthCodeURL(state)
-	return url, nil
+	return url, state, nil
 }
 
 // HandleGoogleCallback processes the callback from Google, completing the login/signup.
@@ -417,24 +481,23 @@ func (s *Service) UpdateUserProfile(ctx context.Context, userID string, data mod
 
 func (s *Service) HandleContactSubmission(ctx context.Context, data models.ContactFormData) error {
 	// 1. Sanitize inputs
-	log.Printf("Contact Form Submitted: Name: %s, Email: %s, Subject: %s, Message: %s",
-		data.Name, data.Email, data.Subject, data.Message)
+	log.Printf("Contact Form Submitted: Name: %s, Email: %s, Subject: %s",
+		data.Name, data.Email, data.Subject)
 
-	adminEmail := "admin@yourplatform.com" // Get from config
 	emailSubject := fmt.Sprintf("New Contact Form Submission: %s", data.Subject)
 	emailBody := fmt.Sprintf(
-		"You have received a new message from the contact form:\n\nName: %s\nEmail: %s\nSubject: %s\n\nMessage:\n%s",
-		data.Name, data.Email, data.Subject, data.Message,
+		"You have received a new message from the contact form:\n\nName: %s\nEmail: %s\n\nMessage:\n%s",
+		data.Name, data.Email, data.Message,
 	)
 
 	// 2. Send an email to the admin using an email service
-	err := s.emailSvc.SendEmail(ctx, []string{adminEmail}, emailSubject, "", emailBody)
+	err := s.emailer.SendEmail(ctx, s.adminEmail, emailSubject, emailBody, "")
 	if err != nil {
 		log.Printf("ERROR sending contact email: %v", err)
 		// Decide if this should be a user-facing error or just logged
 		return fmt.Errorf("failed to send contact message: %w", err)
 	}
-	log.Printf("SIMULATED: Email sent to %s, Subject: %s", adminEmail, emailSubject)
+	log.Printf("SIMULATED: Email sent to %s, Subject: %s", s.adminEmail, emailSubject)
 
 	return nil // Simulate success
 }
@@ -512,6 +575,21 @@ func (s *Service) RemoveLinkFromNote(ctx context.Context, noteID int, linkID int
 }
 
 func (s *Service) PublishNoteToForum(ctx context.Context, userID string, noteID int, publishDetails models.ForumPostPublishDetails) (*models.ForumPost, error) {
+	// 1. Start a transaction
+	tx, err := s.userRepo.BeginTx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("service.PublishNoteToForum.BeginTx: %w", err)
+	}
+	// Defer a rollback in case anything goes wrong.
+	// If the function returns with an error, this will execute and cancel the transaction
+	defer tx.Rollback(ctx)
+
+	// 2. Create transaction-scoped repositories
+	userRepoWithTx := s.userRepo.WithTx(tx)
+	forumRepoWithTx := s.forumRepo.WithTx(tx)
+
+	// 3. Perform operations within the transaction
+	// Validate category ID
 	isValidCategory, err := s.forumSvc.IsValidCategory(ctx, publishDetails.CategoryID)
 	if err != nil {
 		// Log error, maybe return a generic server error or a specific "validation failed"
@@ -521,7 +599,8 @@ func (s *Service) PublishNoteToForum(ctx context.Context, userID string, noteID 
 		return nil, models.ErrInvalidForumPostCategoryID
 	}
 
-	note, err := s.userRepo.GetUserNoteByID(ctx, noteID, userID)
+	// Get the note using transactional user repo
+	note, err := userRepoWithTx.GetUserNoteByID(ctx, noteID, userID)
 	if err != nil {
 		return nil, fmt.Errorf("service.PublishNoteToForum.GetNote: %w", err)
 	}
@@ -539,17 +618,27 @@ func (s *Service) PublishNoteToForum(ctx context.Context, userID string, noteID 
 		// UserID is handled by forumService.CreatePost based on the authenticated user
 	}
 
-	createdPost, err := s.forumSvc.CreatePost(ctx, userID, createPostData) // userID passed here is the authenticated user
+	// Create post usingg transactional forum repo
+	createdPost, err := forumRepoWithTx.CreatePost(ctx, userID, createPostData) // userID passed here is the authenticated user
 	if err != nil {
 		return nil, fmt.Errorf("service.PublishNoteToForum.CreatePost: %w", err)
 	}
 
 	// Mark note as published
-	err = s.userRepo.MarkNoteAsPublished(ctx, noteID, createdPost.ID)
+	err = userRepoWithTx.MarkNoteAsPublished(ctx, noteID, createdPost.ID)
 	if err != nil {
-		// Log this error but don't fail the whole operation as post is created
-		log.Printf("ERROR: service.PublishNoteToForum.MarkNoteAsPublished for noteID %d, postID %d: %v", noteID, createdPost.ID, err)
+		// Because we are in a transaction, if this fails, the defer tx.Rollback(ctx)
+		// will automatically undo the forum post creation.
+		return nil, fmt.Errorf("service.PublishNoteToForum.MarkNoteAsPublished: %w", err)
 	}
+
+	// --- Step 4: Commit the Transaction ---
+	// If we reach this point, all operations were successful.
+	// We commit the transaction to make all changes permanent.
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("service.PublishNoteToForum.Commit: %w", err)
+	}
+
 	return createdPost, nil
 }
 

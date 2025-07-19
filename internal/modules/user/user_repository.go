@@ -6,12 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"jingdezhen-ceramics-backend/internal/models"
+	"log"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	// "github.com/Masterminds/squirrel" // Optional: for SQL query building
 )
 
 // RepositoryInterface defines methods for interacting with user storage.
@@ -49,20 +50,112 @@ type RepositoryInterface interface {
 	GetSavedForumPosts(ctx context.Context, userID string, page, limit int) ([]models.UserSavedPostEntry, int, error)
 }
 
+// This interface represents anything that can execute a SQL query,
+// which includes both a connection pool and a transaction.
+type DBExecutor interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 type Repository struct {
-	db *pgxpool.Pool
+	db       *pgxpool.Pool
+	executor DBExecutor
 }
 
 func NewRepository(db *pgxpool.Pool) RepositoryInterface {
-	return &Repository{db: db}
+	return &Repository{
+		db:       db,
+		executor: db,
+	}
+}
+
+// BeginTx starts a new database transaction.
+func (r *Repository) BeginTx(ctx context.Context) (pgx.Tx, error) {
+	return r.db.Begin(ctx)
+}
+
+// WithTx returns a new instance of the Repository that is "scoped" to the provided transaction.
+// All database operations on the returned repository will be part of this single transaction.
+func (r *Repository) WithTx(tx pgx.Tx) *Repository {
+	return &Repository{
+		db:       r.db,
+		executor: tx, // The executor is now the transaction, not the pool
+	}
+}
+
+func (r *Repository) scanUser(row pgx.Row) (*models.User, error) {
+	var user models.User
+	var avatarURL sql.NullString
+
+	err := row.Scan(
+		&user.ID,
+		&user.Nickname,
+		&user.Email,
+		&user.Role,
+		&avatarURL,
+		&user.ProfileData,
+		&user.ProfileData,
+		&user.AuthProvider,
+		&user.IsActive,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if avatarURL.Valid {
+		user.AvatarURL = &avatarURL.String
+	} else {
+		user.AvatarURL = nil
+	}
+
+	return &user, nil
+}
+
+func (r *Repository) scanUserWithPasswordHash(row pgx.Row) (*models.User, error) {
+	var user models.User
+	var passwordHash sql.NullString
+	var avatarURL sql.NullString
+
+	err := row.Scan(
+		&user.ID,
+		&user.Nickname,
+		&user.Email,
+		&passwordHash,
+		&user.Role,
+		&avatarURL,
+		&user.ProfileData,
+		&user.AuthProvider,
+		&user.IsActive,
+		&user.CreatedAt,
+		&user.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if passwordHash.Valid {
+		user.PasswordHash = &passwordHash.String
+	} else {
+		user.PasswordHash = nil
+	}
+
+	if avatarURL.Valid {
+		user.AvatarURL = &avatarURL.String
+	} else {
+		user.AvatarURL = nil
+	}
+
+	return &user, nil
 }
 
 func (r *Repository) FindByID(ctx context.Context, userID string) (*models.User, error) {
 	user := &models.User{}
 	query := `SELECT id, nickname, email, role, avatar_url, profile_data, auth_provider, is_active, created_at, updated_at FROM users WHERE id = $1`
-	err := r.db.QueryRow(ctx, query, userID).Scan(
-		&user.ID, &user.Nickname, &user.Email, &user.Role, &user.AvatarURL, &user.ProfileData, &user.AuthProvider, &user.IsActive, &user.CreatedAt, &user.UpdatedAt,
-	)
+
+	row := r.executor.QueryRow(ctx, query, userID)
+	user, err := r.scanUser(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, models.ErrNotFound
@@ -77,9 +170,9 @@ func (r *Repository) FindByEmail(ctx context.Context, email string) (*models.Use
 	// Important for checking if email exists during signup if you implement it
 	user := &models.User{}
 	query := `SELECT id, nickname, email, password_hash, role, avatar_url, profile_data, auth_provider, is_active, created_at, updated_at FROM users WHERE email = $1`
-	err := r.db.QueryRow(ctx, query, email).Scan(
-		&user.ID, &user.Nickname, &user.Email, &user.PasswordHash, &user.Role, &user.AvatarURL, &user.ProfileData, &user.AuthProvider, &user.IsActive, &user.CreatedAt, &user.UpdatedAt,
-	)
+
+	row := r.executor.QueryRow(ctx, query, email)
+	user, err := r.scanUserWithPasswordHash(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, models.ErrNotFound
@@ -92,9 +185,9 @@ func (r *Repository) FindByEmail(ctx context.Context, email string) (*models.Use
 func (r *Repository) FindByNickname(ctx context.Context, nickname string) (*models.User, error) {
 	user := &models.User{}
 	query := `SELECT id, nickname, email, role, avatar_url, profile_data, auth_provider, is_active, created_at, updated_at FROM users WHERE nickname = $1`
-	err := r.db.QueryRow(ctx, query, nickname).Scan(
-		&user.ID, &user.Nickname, &user.Email, &user.Role, &user.AvatarURL, &user.ProfileData, &user.AuthProvider, &user.IsActive, &user.CreatedAt, &user.UpdatedAt,
-	)
+
+	row := r.executor.QueryRow(ctx, query, nickname)
+	user, err := r.scanUser(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, models.ErrNotFound
@@ -113,9 +206,8 @@ func (r *Repository) FindByPasswordResetToken(ctx context.Context, token string)
 	WHERE password_reset_token = $1 AND password_reset_expires_at > NOW()
 	`
 
-	err := r.db.QueryRow(ctx, query, token).Scan(
-		&user.ID, &user.Nickname, &user.Email, &user.Role, &user.AvatarURL, &user.CreatedAt, &user.UpdatedAt, &user.IsActive,
-	)
+	row := r.executor.QueryRow(ctx, query, token)
+	user, err := r.scanUserWithPasswordHash(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, models.ErrInvalidToken
@@ -126,6 +218,7 @@ func (r *Repository) FindByPasswordResetToken(ctx context.Context, token string)
 }
 
 func (r *Repository) SetPasswordResetToken(ctx context.Context, userID string, token string, expiresAt time.Time) error {
+	log.Printf("DATABASE: Saving reset token [%s] for user [%s]", token, userID)
 	query := `
 	UPDATE users
 	SET password_reset_token = $1, password_reset_expires_at = $2, updated_at = NOW()
@@ -184,7 +277,7 @@ func (r *Repository) CreateInactiveUser(ctx context.Context, user *models.User, 
         RETURNING id, created_at, updated_at`
 	err := r.db.QueryRow(ctx, query,
 		user.Nickname, user.Email, passwordHash, user.Role, activationToken, expiresAt,
-	).Scan(&user.ID, &user.CreatedAt, &user.UpdatedAt)
+	).Scan(&user.ID, &user.IsActive, &user.AuthProvider, &user.CreatedAt, &user.UpdatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("repository.CreateInactiveUser: %w", err)
 	}
@@ -193,20 +286,22 @@ func (r *Repository) CreateInactiveUser(ctx context.Context, user *models.User, 
 
 func (r *Repository) ActivateUser(ctx context.Context, token string) (*models.User, error) {
 	// Find user by token, set is_active = true, and clear the token
-	var user models.User
+	user := &models.User{}
 	query := `
         UPDATE users
         SET is_active = TRUE, activation_token = NULL, activation_token_expires_at = NULL, updated_at = NOW()
         WHERE activation_token = $1 AND activation_token_expires_at > NOW() AND is_active = FALSE
         RETURNING id, nickname, email, role, avatar_url, profile_data, auth_provider, is_active, created_at, updated_at`
-	err := r.db.QueryRow(ctx, query, token).Scan(&user.ID, &user.Nickname, &user.Email, &user.Role, &user.AvatarURL, &user.ProfileData, &user.AuthProvider, &user.CreatedAt, &user.UpdatedAt)
+
+	row := r.executor.QueryRow(ctx, query, token)
+	user, err := r.scanUser(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, models.ErrInvalidToken
 		}
 		return nil, fmt.Errorf("repository.ActivateUser: %w", err)
 	}
-	return &user, nil
+	return user, nil
 }
 
 // Specifically for OAuth signup flow (Google/WeChat)
@@ -263,9 +358,8 @@ func (r *Repository) Update(ctx context.Context, userID string, data models.User
 		strings.Join(setClauses, ", "), argIdx)
 
 	updatedUser := &models.User{}
-	err := r.db.QueryRow(ctx, query, args...).Scan(
-		&updatedUser.ID, &updatedUser.Nickname, &updatedUser.Email, &updatedUser.PasswordHash, &updatedUser.Role, &updatedUser.AvatarURL, &updatedUser.ProfileData, &updatedUser.AuthProvider, &updatedUser.AuthProviderID, &updatedUser.IsActive, &updatedUser.CreatedAt, &updatedUser.UpdatedAt,
-	)
+	row := r.executor.QueryRow(ctx, query, args...)
+	updatedUser, err := r.scanUser(row)
 	if err != nil {
 		return nil, fmt.Errorf("repository.UpdateUser: %w", err)
 	}

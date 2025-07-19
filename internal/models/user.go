@@ -20,7 +20,7 @@ type User struct {
 	ID             string       `json:"id" db:"id"` // UUID string from DB
 	Nickname       string       `json:"nickname,omitempty" db:"nickname"`
 	Email          string       `json:"email" db:"email"`
-	PasswordHash   string       `json:"-" db:"password_hash"`
+	PasswordHash   *string      `json:"-" db:"password_hash"`
 	Role           string       `json:"role" db:"role"`
 	AvatarURL      *string      `json:"avatar_url,omitempty" db:"avatar_url"`
 	ProfileData    *ProfileData `json:"profile_data,omitempty" db:"profile_data"`
