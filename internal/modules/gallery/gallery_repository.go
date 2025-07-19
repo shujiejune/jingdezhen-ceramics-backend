@@ -2,9 +2,11 @@ package gallery
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"jingdezhen-ceramics-backend/internal/models"
+	"log"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -44,12 +46,107 @@ func NewRepository(db *pgxpool.Pool) RepositoryInterface {
 	return &Repository{db: db, executor: db}
 }
 
+type Scannable interface {
+	Scan(dest ...any) error
+}
+
 func (r *Repository) BeginTx(ctx context.Context) (pgx.Tx, error) {
 	return r.db.Begin(ctx)
 }
 
 func (r *Repository) WithTx(tx pgx.Tx) *Repository {
 	return &Repository{db: r.db, executor: tx}
+}
+
+func (r *Repository) scanPartialArtwork(row Scannable) (*models.Artwork, error) {
+	var art models.Artwork
+	var artistID sql.NullInt64
+	var artistName sql.NullString
+
+	// This scan must match the SELECT in FindAllArtworks
+	err := row.Scan(
+		&art.ID,
+		&art.Title,
+		&art.Category,
+		&art.ThumbnailURL,
+		&art.CreatedAt,
+		&artistID,
+		&artistName,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if artistID.Valid {
+		id := int(artistID.Int64)
+		art.ArtistID = &id
+	}
+	if artistName.Valid {
+		art.ArtistName = &artistName.String
+	}
+
+	return &art, nil
+}
+
+func (r *Repository) scanFullArtwork(row Scannable) (*models.Artwork, error) {
+	var art models.Artwork
+	var artistID sql.NullInt64
+	var artistName sql.NullString
+	var artistNameOverride sql.NullString
+	var description sql.NullString
+	var creationYear sql.NullInt32
+	var dimensions sql.NullString
+	var introduction sql.NullString
+	var updatedAt sql.NullTime
+
+	// The order of these &variables must match the order of columns in the SELECT statement.
+	err := row.Scan(
+		&art.ID,
+		&art.Title,
+		&art.ThumbnailURL,
+		&art.Category,
+		&art.CreatedAt,
+		&updatedAt,
+		&artistID,
+		&artistName,
+		&artistNameOverride,
+		&description,
+		&creationYear,
+		&dimensions,
+		&introduction,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if updatedAt.Valid {
+		art.UpdatedAt = &updatedAt.Time
+	}
+	if artistID.Valid {
+		id := int(artistID.Int64)
+		art.ArtistID = &id
+	}
+	if artistName.Valid {
+		art.ArtistName = &artistName.String
+	}
+	if artistNameOverride.Valid {
+		art.ArtistNameOverride = &artistNameOverride.String
+	}
+	if description.Valid {
+		art.Description = &description.String
+	}
+	if creationYear.Valid {
+		year := int(creationYear.Int32)
+		art.CreationYear = &year
+	}
+	if dimensions.Valid {
+		art.Dimensions = &dimensions.String
+	}
+	if introduction.Valid {
+		art.Introduction = &introduction.String
+	}
+
+	return &art, nil
 }
 
 func (r *Repository) FindAllArtworks(ctx context.Context, filters models.ArtworkFilters) ([]models.Artwork, int, error) {
@@ -107,36 +204,36 @@ func (r *Repository) FindAllArtworks(ctx context.Context, filters models.Artwork
 
 	artworks := []models.Artwork{}
 	for rows.Next() {
-		var art models.Artwork
-		if err := rows.Scan(&art.ID, &art.Title, &art.Category, &art.ThumbnailURL, &art.CreatedAt, &art.ArtistID, &art.ArtistName); err != nil {
+		art, err := r.scanPartialArtwork(rows)
+		if err != nil {
 			return nil, 0, fmt.Errorf("repository.FindAllArtworks.Scan: %w", err)
 		}
-		artworks = append(artworks, art)
+		artworks = append(artworks, *art)
 	}
 
 	return artworks, total, nil
 }
 
 func (r *Repository) FindArtworkByID(ctx context.Context, artworkID int64) (*models.Artwork, error) {
-	var art models.Artwork
+	art := &models.Artwork{}
 	query := `
-		SELECT a.id, a.title, a.category, a.thumbnail_url, a.created_at, a.artist_id, ar.name as artist_name,
-		       a.description, a.creation_year, a.dimensions, a.introduction
+		SELECT
+			a.id, a.title, a.thumbnail_url, a.category, a.created_at, a.updated_at,
+			a.artist_id, ar.name as artist_name, a.artist_name_override,
+			a.description, a.creation_year, a.dimensions, a.introduction
 		FROM artworks a
 		LEFT JOIN artists ar ON a.artist_id = ar.id
 		WHERE a.id = $1
 	`
-	err := r.executor.QueryRow(ctx, query, artworkID).Scan(
-		&art.ID, &art.Title, &art.Category, &art.ThumbnailURL, &art.CreatedAt, &art.ArtistID, &art.ArtistName,
-		&art.Description, &art.CreationYear, &art.Dimensions, &art.Introduction,
-	)
+	row := r.executor.QueryRow(ctx, query, artworkID)
+	art, err := r.scanFullArtwork(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, models.ErrNotFound
 		}
 		return nil, fmt.Errorf("repository.FindArtworkByID: %w", err)
 	}
-	return &art, nil
+	return art, nil
 }
 
 func (r *Repository) GetArtworkImages(ctx context.Context, artworkID int64) ([]models.ArtworkImage, error) {
@@ -179,14 +276,95 @@ func (r *Repository) GetArtworkTags(ctx context.Context, artworkID int64) ([]str
 	return tags, nil
 }
 
-func (r *Repository) FindAllArtists(ctx context.Context, page, limit int) ([]models.Artist, int, error) {
-	// Implement pagination similar to FindAllArtworks
-	return nil, 0, errors.New("not implemented")
+func (r *Repository) scanArtist(row Scannable) (*models.Artist, error) {
+	var artist models.Artist
+
+	// Handle nullable fields for the Artist model
+	var bio sql.NullString
+	var userID sql.NullString
+
+	err := row.Scan(
+		&artist.ID,
+		&artist.Name,
+		&bio,
+		&userID,
+		&artist.CreatedAt,
+		&artist.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if bio.Valid {
+		artist.Bio = &bio.String
+	}
+	if userID.Valid {
+		artist.UserID = &userID.String
+	}
+
+	return &artist, nil
 }
 
+// FindAllArtists retrieves a paginated list of all artists.
+func (r *Repository) FindAllArtists(ctx context.Context, page, limit int) ([]models.Artist, int, error) {
+	// First, get the total count of artists for pagination metadata.
+	var total int
+	countQuery := `SELECT COUNT(*) FROM artists`
+	err := r.executor.QueryRow(ctx, countQuery).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("repository.FindAllArtists.Count: %w", err)
+	}
+
+	if total == 0 {
+		return []models.Artist{}, 0, nil
+	}
+
+	// Then, fetch the paginated list of artists.
+	offset := (page - 1) * limit
+	query := `
+		SELECT id, name, bio, user_id, created_at, updated_at
+		FROM artists
+		ORDER BY name ASC
+		LIMIT $1 OFFSET $2
+	`
+	rows, err := r.executor.Query(ctx, query, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("repository.FindAllArtists.Query: %w", err)
+	}
+	defer rows.Close()
+
+	artists := []models.Artist{}
+	for rows.Next() {
+		artist, err := r.scanArtist(rows)
+		if err != nil {
+			return nil, 0, fmt.Errorf("repository.FindAllArtists.Scan: %w", err)
+		}
+		artists = append(artists, *artist)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("repository.FindAllArtists.RowsErr: %w", err)
+	}
+
+	return artists, total, nil
+}
+
+// FindArtistByID retrieves a single artist by their ID.
 func (r *Repository) FindArtistByID(ctx context.Context, artistID int64) (*models.Artist, error) {
-	// Implement similar to FindArtworkByID
-	return nil, errors.New("not implemented")
+	// The SELECT statement must match the fields expected by the scanArtist helper.
+	query := `
+		SELECT id, name, bio, user_id, created_at, updated_at
+		FROM artists
+		WHERE id = $1
+	`
+	row := r.executor.QueryRow(ctx, query, artistID)
+	artist, err := r.scanArtist(row)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, models.ErrNotFound
+		}
+		return nil, fmt.Errorf("repository.FindArtistByID: %w", err)
+	}
+	return artist, nil
 }
 
 func (r *Repository) FindAllCategories(ctx context.Context) ([]string, error) {
@@ -246,6 +424,7 @@ func (r *Repository) RemoveFavorite(ctx context.Context, userID string, artworkI
 	if cmdTag.RowsAffected() == 0 {
 		// This isn't necessarily an error, could just mean it wasn't a favorite to begin with.
 		// Returning ErrNotFound could be misleading. Returning nil is often fine.
+		log.Printf("failed to remove a fravorite artwork")
 	}
 	return nil
 }

@@ -4,12 +4,12 @@ import "time"
 
 // Artist represents an artist (can be a platform user or historical)
 type Artist struct {
-	ID        int       `json:"id" db:"id"`
-	Name      string    `json:"name" db:"name"`
-	Bio       string    `json:"bio,omitempty" db:"bio"`
-	UserID    *string   `json:"user_id,omitempty" db:"user_id"` // Link to users.id (UUID string)
-	CreatedAt time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
+	ID        int        `json:"id" db:"id"`
+	Name      string     `json:"name" db:"name"`
+	Bio       *string    `json:"bio,omitempty" db:"bio"`
+	UserID    *string    `json:"user_id,omitempty" db:"user_id"` // Link to users.id (UUID string)
+	CreatedAt time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt *time.Time `json:"updated_at" db:"updated_at"`
 }
 
 // ArtworkImage represents an image associated with an artwork
@@ -27,22 +27,21 @@ type Artwork struct {
 	ID                 int64          `json:"id" db:"id"` // Use int64 for BIGSERIAL
 	Title              string         `json:"title" db:"title"`
 	ArtistID           *int           `json:"artist_id,omitempty" db:"artist_id"` // FK to artists.id
-	ArtistName         string         `json:"artist_name,omitempty" db:"-"`       // Populated by JOIN if ArtistID is present
-	ArtistNameOverride string         `json:"artist_name_override,omitempty" db:"artist_name_override"`
+	ArtistName         *string        `json:"artist_name,omitempty" db:"-"`       // Populated by JOIN if ArtistID is present
+	ArtistNameOverride *string        `json:"artist_name_override,omitempty" db:"artist_name_override"`
 	ThumbnailURL       string         `json:"thumbnail_url" db:"thumbnail_url"`
-	Description        string         `json:"description,omitempty" db:"description"`
+	Description        *string        `json:"description,omitempty" db:"description"`
 	CreationYear       *int           `json:"creation_year,omitempty" db:"creation_year"`
-	Dimensions         string         `json:"dimensions,omitempty" db:"dimensions"`
-	Materials          string         `json:"materials,omitempty" db:"materials"`
+	Dimensions         *string        `json:"dimensions,omitempty" db:"dimensions"`
 	Category           string         `json:"category,omitempty" db:"category"` // Or CategoryID if you have an artwork_categories table
-	Introduction       string         `json:"introduction,omitempty" db:"introduction"`
+	Introduction       *string        `json:"introduction,omitempty" db:"introduction"`
 	IsFavorite         bool           `json:"is_favorite,omitempty" db:"-"` // For current user, populated in service
 	FavoriteCount      int            `json:"favorite_count" db:"-"`        // Calculated
 	NoteCount          int            `json:"note_count" db:"-"`            // Calculated
 	Images             []ArtworkImage `json:"images,omitempty" db:"-"`      // Loaded separately or via JOIN aggregation
 	Tags               []string       `json:"tags,omitempty" db:"-"`        // Loaded via junction table
 	CreatedAt          time.Time      `json:"created_at" db:"created_at"`
-	UpdatedAt          time.Time      `json:"updated_at" db:"updated_at"`
+	UpdatedAt          *time.Time     `json:"updated_at" db:"updated_at"`
 }
 
 // CreateArtworkData is for creating new artworks

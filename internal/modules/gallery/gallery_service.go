@@ -4,7 +4,8 @@ import (
 	"context"
 	"fmt"
 	"jingdezhen-ceramics-backend/internal/models"
-	"jingdezhen-ceramics-backend/internal/user" // For creating notes
+	"jingdezhen-ceramics-backend/internal/modules/user" // For creating notes
+	"log"
 )
 
 type ServiceInterface interface {
@@ -60,18 +61,21 @@ func (s *Service) GetArtworkByID(ctx context.Context, userID string, artworkID i
 
 	// Fetch related data
 	images, err := s.repo.GetArtworkImages(ctx, artworkID)
-	if err != nil { /* log error but don't fail the whole request */
+	if err != nil {
+		log.Printf("failed to get images for artwork: %d", artworkID)
 	}
 	artwork.Images = images
 
 	tags, err := s.repo.GetArtworkTags(ctx, artworkID)
-	if err != nil { /* log error */
+	if err != nil {
+		log.Printf("failed to get tags for artwork: %d", artworkID)
 	}
 	artwork.Tags = tags
 
 	if userID != "" {
 		favoriteMap, err := s.repo.CheckFavorites(ctx, userID, []int64{artworkID})
-		if err != nil { /* log error */
+		if err != nil {
+			log.Printf("failed to get favorites of user: %s", userID)
 		}
 		if favoriteMap[artworkID] {
 			artwork.IsFavorite = true
@@ -108,12 +112,15 @@ func (s *Service) AddNoteToArtwork(ctx context.Context, userID string, artworkID
 		return nil, fmt.Errorf("cannot add note to non-existent artwork: %w", err)
 	}
 
+	entityType := "artwork"
+	entityID := int(artworkID) // cast int64 to int
+
 	// Delegate note creation to the user service.
 	noteData := models.CreateUserNoteData{
 		Title:      data.Title,
 		Content:    data.Content,
-		EntityType: "artwork",
-		EntityID:   int(artworkID), // Cast int64 to int
+		EntityType: &entityType,
+		EntityID:   &entityID,
 	}
 
 	return s.userSvc.CreateUserNote(ctx, userID, noteData)
