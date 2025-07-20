@@ -141,7 +141,6 @@ func SetupRoutes(
 			authForumGroup.POST("/posts/:post_id/like", forumHandler.LikePost)
 			authForumGroup.POST("/posts/:post_id/save", forumHandler.SavePost)
 			authForumGroup.POST("/comments/:comment_id/like", forumHandler.LikeComment)
-			// ... comment likes, saves, updates, deletes
 		}
 	}
 
