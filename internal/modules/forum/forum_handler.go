@@ -23,6 +23,15 @@ func NewHandler(service ServiceInterface) *Handler {
 	}
 }
 
+func (h *Handler) GetPosts(c echo.Context) error {
+	posts, err := h.service.GetPosts(c.Request().Context())
+	if err != nil {
+		c.Logger().Error("Handler.GetPosts: ", err)
+		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to retrieve posts"})
+	}
+	return c.JSON(http.StatusOK, posts)
+}
+
 // GetPostByID handles fetching a single post and its entire comment thread.
 func (h *Handler) GetPostByID(c echo.Context) error {
 	userID, _ := utils.GetUserIDFromContext(c)
@@ -41,6 +50,30 @@ func (h *Handler) GetPostByID(c echo.Context) error {
 		"post":     post,
 		"comments": comments,
 	})
+}
+
+// DeletePost handles deleting a post.
+func (h *Handler) DeletePost(c echo.Context) error {
+	userID, err := utils.GetUserIDFromContext(c)
+	if err != nil {
+		return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: err.Error()})
+	}
+	userRole := c.Get("userRole").(string) // Assumes JWT middleware sets this
+
+	postID, err := strconv.ParseInt(c.Param("post_id"), 10, 64)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid post ID"})
+	}
+
+	err = h.service.DeletePost(c.Request().Context(), userID, userRole, postID)
+	if err != nil {
+		if errors.Is(err, models.ErrForbidden) {
+			return c.JSON(http.StatusForbidden, models.ErrorResponse{Message: "You do not have permission to delete this post"})
+		}
+		// Handle other errors
+		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to delete post"})
+	}
+	return c.NoContent(http.StatusNoContent)
 }
 
 // CreateComment handles both top-level and nested comments.
@@ -104,28 +137,4 @@ func (h *Handler) CreateReply(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to create reply"})
 	}
 	return c.JSON(http.StatusCreated, comment)
-}
-
-// DeletePost handles deleting a post.
-func (h *Handler) DeletePost(c echo.Context) error {
-	userID, err := utils.GetUserIDFromContext(c)
-	if err != nil {
-		return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: err.Error()})
-	}
-	userRole := c.Get("userRole").(string) // Assumes JWT middleware sets this
-
-	postID, err := strconv.ParseInt(c.Param("post_id"), 10, 64)
-	if err != nil {
-		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid post ID"})
-	}
-
-	err = h.service.DeletePost(c.Request().Context(), userID, userRole, postID)
-	if err != nil {
-		if errors.Is(err, models.ErrForbidden) {
-			return c.JSON(http.StatusForbidden, models.ErrorResponse{Message: "You do not have permission to delete this post"})
-		}
-		// Handle other errors
-		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to delete post"})
-	}
-	return c.NoContent(http.StatusNoContent)
 }
