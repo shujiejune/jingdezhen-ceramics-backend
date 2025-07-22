@@ -4,28 +4,59 @@ import "time"
 
 // Course represents a top-level online course.
 type Course struct {
-	ID           int64     `json:"id" db:"id"`
-	Title        string    `json:"title" db:"title"`
-	Description  string    `json:"description" db:"description"`
-	InstructorID *string   `json:"instructor_id,omitempty" db:"instructor_id"` // User ID (UUID)
-	ThumbnailURL string    `json:"thumbnail_url" db:"thumbnail_url"`
-	CreatedAt    time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at" db:"updated_at"`
-	// This field will be populated by the service layer
-	Chapters []CourseChapter `json:"chapters,omitempty" db:"-"`
+	ID           int64           `json:"id" db:"id"`
+	Title        string          `json:"title" db:"title"`
+	Description  string          `json:"description" db:"description"`
+	InstructorID *string         `json:"instructor_id,omitempty" db:"instructor_id"` // User ID (UUID)
+	ThumbnailURL string          `json:"thumbnail_url" db:"thumbnail_url"`
+	CreatedAt    time.Time       `json:"created_at" db:"created_at"`
+	UpdatedAt    time.Time       `json:"updated_at" db:"updated_at"`
+	Chapters     []CourseChapter `json:"chapters,omitempty" db:"-"`
 }
 
 // CourseChapter represents a single chapter within a course.
 type CourseChapter struct {
-	ID             int64  `json:"id" db:"id"`
-	CourseID       int64  `json:"course_id" db:"course_id"`
-	Title          string `json:"title" db:"title"`
-	DisplayOrder   int    `json:"display_order" db:"display_order"`
-	VideoURL       string `json:"video_url,omitempty" db:"video_url"`   // Omitted for non-enrolled users on protected chapters
-	Content        string `json:"content,omitempty" db:"content"`       // Omitted for non-enrolled users on protected chapters
-	ContentPreview string `json:"content_preview" db:"content_preview"` // Always available
+	ID                 int64  `json:"id" db:"id"`
+	CourseID           int64  `json:"course_id" db:"course_id"`
+	Title              string `json:"title" db:"title"`
+	DisplayOrder       int    `json:"display_order" db:"display_order"`
+	AvailableForGuests bool   `json:"available_to_guests" db:"available_to_guests"`
 	// User-specific progress, populated by the service layer
-	ProgressPercentage int `json:"progress_percentage" db:"-"`
+	ProgressPercentage int                   `json:"progress_percentage" db:"-"`
+	ContentBlocks      []ChapterContentBlock `json:"content_blocks,omitempty" db:"-"`
+}
+
+// ChapterContentBlock represents a single piece of content within a chapter.
+type ChapterContentBlock struct {
+	ID           int64  `json:"id" db:"id"`
+	ChapterID    int64  `json:"chapter_id" db:"chapter_id"`
+	Type         string `json:"type" db:"type"`       // "video", "passage", "quiz"
+	Content      any    `json:"content" db:"content"` // Stored as JSONB
+	DisplayOrder int    `json:"display_order" db:"display_order"`
+}
+
+// --- Structs for the JSONB Content field ---
+
+// VideoContent defines the structure for a "video" content block.
+type VideoContent struct {
+	URL      string `json:"url"`
+	Duration int    `json:"duration_seconds"`
+	Title    string `json:"title,omitempty"`
+}
+
+// PassageContent defines the structure for a "passage" content block.
+type PassageContent struct {
+	Title string `json:"title"`
+	Body  string `json:"body"`
+}
+
+type AssignmentContent struct {
+	Description string `json:"description"`
+}
+
+// QuizContent defines the structure for a "quiz" content block.
+type QuizContent struct {
+	QuizID int64 `json:"quiz_id"` // Foreign key to a separate 'quizzes' table
 }
 
 // UserChapterProgress tracks a specific user's progress in a chapter.
@@ -46,5 +77,5 @@ type UpdateProgressRequest struct {
 
 // SubmitQuizRequest defines the request body for submitting a quiz.
 type SubmitQuizRequest struct {
-	Answers map[string]interface{} `json:"answers" validate:"required"` // Flexible map for quiz answers
+	Answers map[string]any `json:"answers" validate:"required"` // Flexible map for quiz answers
 }
