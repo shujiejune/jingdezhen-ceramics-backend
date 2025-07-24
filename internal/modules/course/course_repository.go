@@ -2,6 +2,7 @@ package course
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"jingdezhen-ceramics-backend/internal/models"
@@ -23,10 +24,12 @@ type RepositoryInterface interface {
 	FindCourseByID(ctx context.Context, courseID int64) (*models.Course, error)
 	FindChaptersByCourseID(ctx context.Context, courseID int64) ([]models.CourseChapter, error)
 	FindChapterByID(ctx context.Context, chapterID int64) (*models.CourseChapter, error)
+	FindQuizWithAnswersByID(ctx context.Context, quizID int64) (*models.QuizContent, error)
 	CheckUserEnrollment(ctx context.Context, userID string, courseID int64) (bool, error)
 	EnrollUserInCourse(ctx context.Context, userID string, courseID int64) error
 	GetUserProgressForChapters(ctx context.Context, userID string, chapterIDs []int64) (map[int64]models.UserChapterProgress, error)
 	UpdateUserProgress(ctx context.Context, userID string, chapterID int64, progress models.UpdateProgressRequest) error
+	SaveQuizAttempt(ctx context.Context, attempt models.QuizAttempt) (*models.QuizAttempt, error)
 }
 
 type Repository struct {
@@ -106,6 +109,29 @@ func (r *Repository) FindChapterByID(ctx context.Context, chapterID int64) (*mod
 	return &chapter, nil
 }
 
+// FindQuizWithAnswersByID retrieves the full quiz structure, including correct answers, from the database.
+// This should only be called by the service layer for scoring, not sent directly to the client.
+func (r *Repository) FindQuizWithAnswersByID(ctx context.Context, quizID int64) (*models.QuizContent, error) {
+	var quiz models.QuizContent
+	var questionsJSON []byte // We'll scan the JSONB data into a byte slice first
+
+	query := `SELECT id, title, questions FROM quizzes WHERE id = $1`
+	err := r.executor.QueryRow(ctx, query, quizID).Scan(&quiz.ID, &quiz.Title, &questionsJSON)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, models.ErrNotFound
+		}
+		return nil, fmt.Errorf("repository.FindQuizWithAnswersByID: %w", err)
+	}
+
+	// Unmarshal the JSONB data into the Questions slice
+	if err := json.Unmarshal(questionsJSON, &quiz.Questions); err != nil {
+		return nil, fmt.Errorf("repository.FindQuizWithAnswersByID.Unmarshal: %w", err)
+	}
+
+	return &quiz, nil
+}
+
 func (r *Repository) CheckUserEnrollment(ctx context.Context, userID string, courseID int64) (bool, error) {
 	var exists bool
 	query := `SELECT EXISTS(SELECT 1 FROM user_enrollments WHERE user_id = $1 AND course_id = $2)`
@@ -162,4 +188,33 @@ func (r *Repository) UpdateUserProgress(ctx context.Context, userID string, chap
 		return fmt.Errorf("repository.UpdateUserProgress: %w", err)
 	}
 	return nil
+}
+
+// SaveQuizAttempt inserts a new record of a user's quiz submission into the database.
+func (r *Repository) SaveQuizAttempt(ctx context.Context, attempt models.QuizAttempt) (*models.QuizAttempt, error) {
+	// Marshal the user's answers map into a JSON string for the JSONB column
+	answersJSON, err := json.Marshal(attempt.Answers)
+	if err != nil {
+		return nil, fmt.Errorf("repository.SaveQuizAttempt.Marshal: %w", err)
+	}
+
+	query := `
+		INSERT INTO quiz_attempts (user_id, quiz_id, answers, score, status, submitted_at)
+		VALUES ($1, $2, $3, $4, $5, $6)
+		RETURNING id
+	`
+	err = r.executor.QueryRow(ctx, query,
+		attempt.UserID,
+		attempt.QuizID,
+		answersJSON,
+		attempt.Score,
+		attempt.Status,
+		attempt.SubmittedAt,
+	).Scan(&attempt.ID)
+
+	if err != nil {
+		return nil, fmt.Errorf("repository.SaveQuizAttempt.Insert: %w", err)
+	}
+
+	return &attempt, nil
 }

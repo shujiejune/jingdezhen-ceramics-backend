@@ -18,6 +18,18 @@ type Question struct {
 	Points  int      `json:"points"`
 }
 
+// QuizAttempt represents a user's submission for a quiz.
+// This maps to the 'quiz_attempts' table.
+type QuizAttempt struct {
+	ID          int64          `json:"id" db:"id"`
+	UserID      string         `json:"user_id" db:"user_id"`
+	QuizID      int64          `json:"quiz_id" db:"quiz_id"`
+	Answers     map[string]any `json:"answers" db:"answers"` // Stored as JSONB
+	Score       int            `json:"score" db:"score"`
+	Status      string         `json:"status" db:"status"` // "graded", "pending_manual_grade"
+	SubmittedAt time.Time      `json:"submitted_at" db:"submitted_at"`
+}
+
 type QuizAttemptResult struct {
 	AttemptID      int64          `json:"attempt_id"`
 	Score          int            `json:"score"`
@@ -29,6 +41,5 @@ type QuizAttemptResult struct {
 
 // SubmitQuizRequest defines the request body for submitting a quiz.
 type SubmitQuizRequest struct {
-	Answers   map[string]any `json:"answers" validate:"required"` // Flexible map for quiz answers
-	CreatedAt time.Time
+	Answers map[string]any `json:"answers" validate:"required"` // Flexible map for quiz answers
 }

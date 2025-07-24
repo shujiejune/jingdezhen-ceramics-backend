@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"jingdezhen-ceramics-backend/internal/models"
 	"jingdezhen-ceramics-backend/internal/modules/user"
+	"math"
 	"time"
 )
 
@@ -219,8 +220,35 @@ func (s *Service) SubmitQuiz(ctx context.Context, userID string, chapterID int64
 				}
 			}
 		case "multiple_choice":
-			// This requires more complex comparison of slices
-			// For simplicity, we'll skip the detailed implementation here.
+			correctAnswerSlice, ok1 := question.Answer.([]any)
+			userAnswerSlice, ok2 := userAnswer.([]any)
+			if !ok1 || !ok2 {
+				// If the types are wrong, something is malformed. Skip scoring.
+				continue
+			}
+
+			// Use maps for efficient lookup to find matches, regardless of order.
+			correctSet := make(map[string]bool)
+			for _, item := range correctAnswerSlice {
+				if str, ok := item.(string); ok {
+					correctSet[str] = true
+				}
+			}
+
+			matchedCount := 0
+			for _, item := range userAnswerSlice {
+				if str, ok := item.(string); ok {
+					if correctSet[str] {
+						matchedCount++
+					}
+				}
+			}
+
+			if len(correctSet) > 0 {
+				// Use floating point for division, then round to nearest integer.
+				partialScore := (float64(matchedCount) / float64(len(correctSet))) * float64(question.Points)
+				score += int(math.Round(partialScore))
+			}
 		case "true_or_false":
 			if correctAnswer, ok := question.Answer; ok {
 				if correctAnswer == userAnswer {
@@ -228,13 +256,31 @@ func (s *Service) SubmitQuiz(ctx context.Context, userID string, chapterID int64
 				}
 			}
 		case "fill_blanks":
+			correctAnswerSlice, ok1 := question.Answer.([]any)
+			userAnswerSlice, ok2 := userAnswer.([]any)
+			if !ok1 || !ok2 {
+				// If the types are wrong, something is malformed. Skip scoring.
+				continue
+			}
+
+			matchedCount := 0
+			for idx, item := range userAnswerSlice {
+				if str, ok := item.(string); ok {
+					if str == correctAnswerSlice[idx] {
+						matchedCount++
+					}
+				}
+			}
+
+			partialScore := (float64(matchedCount) / float64(len(correctAnswerSlice))) * float64(question.Points)
+			score += int(math.Round(partialScore))
 		case "essay":
 			hasEssay = true // Mark for manual grading
 		}
 	}
 
 	// 4. Save the attempt and score to the DB (e.g., user_quiz_attempts table).
-	attempt := models.QuizAttempt{ // You'll need to define this struct
+	attempt := models.QuizAttempt{
 		UserID:      userID,
 		QuizID:      quizID,
 		Answers:     data.Answers, // Save what the user submitted
@@ -260,7 +306,7 @@ func (s *Service) SubmitQuiz(ctx context.Context, userID string, chapterID int64
 		feedback += " Your essay questions are pending review."
 	}
 
-	result := &QuizAttemptResult{
+	result := &models.QuizAttemptResult{
 		AttemptID:      savedAttempt.ID,
 		Score:          score,
 		TotalPoints:    totalPoints,
