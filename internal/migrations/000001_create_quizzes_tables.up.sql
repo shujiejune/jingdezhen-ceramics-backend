@@ -1,0 +1,7 @@
+CREATE TABLE quizzes (
+    id BIGSERIAL PRIMARY KEY,
+    title TEXT NOT NULL,
+    questions JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

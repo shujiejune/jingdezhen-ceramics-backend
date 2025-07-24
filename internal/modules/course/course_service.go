@@ -6,6 +6,7 @@ import (
 	"jingdezhen-ceramics-backend/internal/models"
 	"jingdezhen-ceramics-backend/internal/modules/user"
 	"math"
+	"strings"
 	"time"
 )
 
@@ -250,8 +251,10 @@ func (s *Service) SubmitQuiz(ctx context.Context, userID string, chapterID int64
 				score += int(math.Round(partialScore))
 			}
 		case "true_or_false":
-			if correctAnswer, ok := question.Answer; ok {
-				if correctAnswer == userAnswer {
+			correctAnswer, ok1 := question.Answer.(bool)
+			userAnswerBool, ok2 := userAnswer.(bool)
+			if ok1 && ok2 {
+				if correctAnswer == userAnswerBool {
 					score += question.Points
 				}
 			}
@@ -263,10 +266,21 @@ func (s *Service) SubmitQuiz(ctx context.Context, userID string, chapterID int64
 				continue
 			}
 
+			// Prevent division by zero if the quiz question was misconfigured
+			if len(correctAnswerSlice) == 0 {
+				continue
+			}
+
 			matchedCount := 0
-			for idx, item := range userAnswerSlice {
-				if str, ok := item.(string); ok {
-					if str == correctAnswerSlice[idx] {
+			for i := 0; i < len(correctAnswerSlice); i++ {
+				if i >= len(userAnswerSlice) {
+					break
+				}
+				userAnswerStr, okUser := userAnswerSlice[i].(string)
+				correctAnswerStr, okCorrect := correctAnswerSlice[i].(string)
+				if okUser && okCorrect {
+					// Use strings.EqualFold for case-insensitive comparison
+					if strings.EqualFold(userAnswerStr, correctAnswerStr) {
 						matchedCount++
 					}
 				}
