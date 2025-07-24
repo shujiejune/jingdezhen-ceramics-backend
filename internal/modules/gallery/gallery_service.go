@@ -16,7 +16,7 @@ type ServiceInterface interface {
 	GetGalleryCategories(ctx context.Context) ([]string, error)
 	MarkAsFavorite(ctx context.Context, userID string, artworkID int64) error
 	UnmarkAsFavorite(ctx context.Context, userID string, artworkID int64) error
-	AddNoteToArtwork(ctx context.Context, userID string, artworkID int64, data models.AddNoteToArtworkRequest) (*models.UserNote, error)
+	AddNoteToArtwork(ctx context.Context, userID string, artworkID int64, data models.AddNoteToEntityRequest) (*models.UserNote, error)
 }
 
 type Service struct {
@@ -105,22 +105,21 @@ func (s *Service) UnmarkAsFavorite(ctx context.Context, userID string, artworkID
 	return s.repo.RemoveFavorite(ctx, userID, artworkID)
 }
 
-func (s *Service) AddNoteToArtwork(ctx context.Context, userID string, artworkID int64, data models.AddNoteToArtworkRequest) (*models.UserNote, error) {
+func (s *Service) AddNoteToArtwork(ctx context.Context, userID string, artworkID int64, data models.AddNoteToEntityRequest) (*models.UserNote, error) {
 	// Business logic: First, verify the artwork actually exists.
 	_, err := s.repo.FindArtworkByID(ctx, artworkID)
 	if err != nil {
 		return nil, fmt.Errorf("cannot add note to non-existent artwork: %w", err)
 	}
 
-	entityType := "artwork"
-	entityID := int(artworkID) // cast int64 to int
-
 	// Delegate note creation to the user service.
 	noteData := models.CreateUserNoteData{
-		Title:      data.Title,
-		Content:    data.Content,
-		EntityType: &entityType,
-		EntityID:   &entityID,
+		Title:          data.Title,
+		Content:        data.Content,
+		EntityType:     &data.EntityType,
+		EntityIDInt:    data.EntityIDInt,
+		EntityIDUUID:   data.EntityIDUUID,
+		EntityIDString: data.EntityIDString,
 	}
 
 	return s.userSvc.CreateUserNote(ctx, userID, noteData)

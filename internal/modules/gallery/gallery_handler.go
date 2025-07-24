@@ -147,7 +147,7 @@ func (h *Handler) AddNoteToArtwork(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid artwork ID"})
 	}
 
-	var req models.AddNoteToArtworkRequest
+	var req models.AddNoteToEntityRequest
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid request body"})
 	}

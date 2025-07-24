@@ -34,8 +34,10 @@ type CreateUserNoteData struct {
 	Title   string `json:"title" validate:"required,max=255"`
 	Content string `json:"content" validate:"required"`
 	// Optional: Initial primary association
-	EntityType *string `json:"entity_type,omitempty" validate:"omitempty,oneof=artwork course_chapter"`
-	EntityID   *int    `json:"entity_id,omitempty" validate:"omitempty,gt=0"`
+	EntityType     *string `json:"entity_type,omitempty" validate:"omitempty,oneof=artwork course_chapter"`
+	EntityIDInt    *int    `json:"entity_id,omitempty" validate:"omitempty,gt=0"`
+	EntityIDUUID   *string `json:"entity_id_uuid,omitempty" validate:"omitempty,uuid"`
+	EntityIDString *string `json:"entity_id_string,omitempty"`
 }
 
 // UpdateUserNoteData is the data needed to update a user note
