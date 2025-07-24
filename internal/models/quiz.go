@@ -30,6 +30,8 @@ type QuizAttempt struct {
 	SubmittedAt time.Time      `json:"submitted_at" db:"submitted_at"`
 }
 
+// QuizAttempt is for database and inner logic
+// QuizAttemptResult is tailored for API response sent back to the client
 type QuizAttemptResult struct {
 	AttemptID      int64          `json:"attempt_id"`
 	Score          int            `json:"score"`
