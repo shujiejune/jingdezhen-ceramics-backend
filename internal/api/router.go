@@ -102,6 +102,7 @@ func SetupRoutes(
 	cGroup := e.Group("/courses")
 	{
 		cGroup.GET("", courseHandler.GetAllCourses)
+		cGroup.GET("/quizzes/:quiz_id", courseHandler.GetQuiz)
 		cGroup.GET("/:course_id", courseHandler.GetCourseDetails)                       // Chapters list
 		cGroup.GET("/:course_id/chapters/:chapter_id", courseHandler.GetChapterContent) // Public up to chapter 2
 
@@ -114,9 +115,10 @@ func SetupRoutes(
 			authCourseGroup.GET("/:course_id/chapters/:chapter_id/full", courseHandler.GetFullChapterContentForEnrolled)
 			authCourseGroup.POST("/:course_id/chapters/:chapter_id/progress", courseHandler.UpdateProgress)
 			authCourseGroup.POST("/:course_id/chapters/:chapter_id/notes", courseHandler.AddNoteToChapter)
+			authCourseGroup.POST("/:course_id/chapters/:chapter_id/quizzes/:assignment_id/submit", courseHandler.SubmitAssignment)
 			authCourseGroup.POST("/:course_id/chapters/:chapter_id/quizzes/:quiz_id/submit", courseHandler.SubmitQuiz)
+			//authCourseGroup.POST("/:course_id/chapters/:chapter_id/video-quizzes/:quiz_id/submit", courseHandler.SubmitVideoQuiz)
 		}
-		// Video related endpoints if needed (e.g., video quiz submissions)
 	}
 
 	/* --- Forum (Public read, Protected write/interact) --- */

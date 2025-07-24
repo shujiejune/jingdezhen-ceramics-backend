@@ -189,6 +189,23 @@ func (h *Handler) SubmitAssignment(c echo.Context) error {
 	return c.JSON(http.StatusOK, result)
 }
 
+func (h *Handler) GetQuiz(c echo.Context) error {
+	quizID, err := strconv.ParseInt(c.Param("quiz_id"), 10, 64)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid quiz ID"})
+	}
+
+	quiz, err := h.service.GetQuizDetails(c.Request().Context(), quizID)
+	if err != nil {
+		if errors.Is(err, models.ErrNotFound) {
+			return c.JSON(http.StatusNotFound, models.ErrorResponse{Message: "Quiz not found"})
+		}
+		c.Logger().Error("Handler.GetQuiz: ", err)
+		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to retrieve quiz details"})
+	}
+	return c.JSON(http.StatusOK, quiz)
+}
+
 func (h *Handler) SubmitQuiz(c echo.Context) error {
 	userID, err := utils.GetUserIDFromContext(c)
 	if err != nil {

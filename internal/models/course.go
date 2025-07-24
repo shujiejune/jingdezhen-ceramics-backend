@@ -51,17 +51,16 @@ type PassageContent struct {
 	Body  string `json:"body"`
 }
 
+// AssignmentContent defines the structure for an "assignment" content block.
 type AssignmentContent struct {
+	AssignmentID   int64      `json:"assignment_id"`
 	Description    string     `json:"description"`
 	AttachmentURLs []string   `json:"attachment_urls,omitempty"`
 	ApplyDeadline  bool       `json:"apply_deadline"`
 	Deadline       *time.Time `json:"deadline"`
 }
 
-// QuizContent defines the structure for a "quiz" content block.
-type QuizContent struct {
-	QuizID int64 `json:"quiz_id"` // Foreign key to a separate 'quizzes' table
-}
+// QuizContent and SubmitQuizRequest are defined in quiz.go
 
 // UserChapterProgress tracks a specific user's progress in a chapter.
 type UserChapterProgress struct {
@@ -82,9 +81,4 @@ type UpdateProgressRequest struct {
 // SubmitAssignmentRequest defines the request body for submitting a quiz.
 type SubmitAssignmentRequest struct {
 	Answers map[string]any `json:"answers" validate:"required"` // Flexible map for assignment answers
-}
-
-// SubmitQuizRequest defines the request body for submitting a quiz.
-type SubmitQuizRequest struct {
-	Answers map[string]any `json:"answers" validate:"required"` // Flexible map for quiz answers
 }
