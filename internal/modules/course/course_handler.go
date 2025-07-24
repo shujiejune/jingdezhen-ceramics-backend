@@ -139,7 +139,7 @@ func (h *Handler) AddNoteToChapter(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid chapter ID"})
 	}
 
-	var req models.AddNoteToArtworkRequest // Reusing this struct for simple Title/Content
+	var req models.AddNoteToEntityRequest // Reusing this struct for simple Title/Content
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid request body"})
 	}
@@ -156,6 +156,37 @@ func (h *Handler) AddNoteToChapter(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to add note"})
 	}
 	return c.JSON(http.StatusCreated, note)
+}
+
+func (h *Handler) SubmitAssignment(c echo.Context) error {
+	userID, err := utils.GetUserIDFromContext(c)
+	if err != nil {
+		return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: err.Error()})
+	}
+	chapterID, err := strconv.ParseInt(c.Param("chapter_id"), 10, 64)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid chapter ID"})
+	}
+	assignmentID, err := strconv.ParseInt(c.Param("assignment_id"), 10, 64)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid assignment ID"})
+	}
+
+	var req models.SubmitAssignmentRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid request body"})
+	}
+	if err := h.validate.Struct(req); err != nil {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Validation failed: " + err.Error()})
+	}
+
+	result, err := h.service.SubmitAssignment(c.Request().Context(), userID, chapterID, assignmentID, req)
+	if err != nil {
+		// Handle specific errors like assignment not found, user not enrolled, etc.
+		c.Logger().Error("Handler.SubmitAssignment: ", err)
+		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to submit assignment"})
+	}
+	return c.JSON(http.StatusOK, result)
 }
 
 func (h *Handler) SubmitQuiz(c echo.Context) error {

@@ -23,6 +23,7 @@ type CourseChapter struct {
 	AvailableForGuests bool   `json:"available_to_guests" db:"available_to_guests"`
 	// User-specific progress, populated by the service layer
 	ProgressPercentage int                   `json:"progress_percentage" db:"-"`
+	ResourceLinks      []string              `json:"resource_links,omitempty" db:"-"`
 	ContentBlocks      []ChapterContentBlock `json:"content_blocks,omitempty" db:"-"`
 }
 
@@ -51,7 +52,10 @@ type PassageContent struct {
 }
 
 type AssignmentContent struct {
-	Description string `json:"description"`
+	Description    string     `json:"description"`
+	AttachmentURLs []string   `json:"attachment_urls,omitempty"`
+	ApplyDeadline  bool       `json:"apply_deadline"`
+	Deadline       *time.Time `json:"deadline"`
 }
 
 // QuizContent defines the structure for a "quiz" content block.
@@ -73,6 +77,11 @@ type UserChapterProgress struct {
 type UpdateProgressRequest struct {
 	ProgressPercentage int `json:"progress_percentage" validate:"gte=0,lte=100"`
 	VideoLastStoppedAt int `json:"video_last_stopped_at" validate:"gte=0"`
+}
+
+// SubmitAssignmentRequest defines the request body for submitting a quiz.
+type SubmitAssignmentRequest struct {
+	Answers map[string]any `json:"answers" validate:"required"` // Flexible map for assignment answers
 }
 
 // SubmitQuizRequest defines the request body for submitting a quiz.

@@ -16,8 +16,9 @@ type ServiceInterface interface {
 	GetChapterContent(ctx context.Context, userID string, chapterID int64) (*models.CourseChapter, error)
 	EnrollUserInCourse(ctx context.Context, userID string, courseID int64) error
 	UpdateUserProgress(ctx context.Context, userID string, chapterID int64, progress models.UpdateProgressRequest) error
-	AddNoteToChapter(ctx context.Context, userID string, chapterID int64, data models.AddNoteToArtworkRequest) (*models.UserNote, error)
-	SubmitQuiz(ctx context.Context, userID string, chapterID int64, quizID int64, data models.SubmitQuizRequest) (interface{}, error)
+	AddNoteToChapter(ctx context.Context, userID string, chapterID int64, data models.AddNoteToEntityRequest) (*models.UserNote, error)
+	SubmitAssignment(ctx context.Context, userID string, chapterID int64, assignmentID int64, data models.SubmitAssignmentRequest) (any, error)
+	SubmitQuiz(ctx context.Context, userID string, chapterID int64, quizID int64, data models.SubmitQuizRequest) (any, error)
 }
 
 type Service struct {

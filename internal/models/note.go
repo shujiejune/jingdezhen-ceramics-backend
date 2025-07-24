@@ -44,6 +44,16 @@ type UpdateUserNoteData struct {
 	Content *string `json:"content,omitempty"`
 }
 
+// AddNoteToEntityRequest defines the request body for adding a note to an entity, e.g. artwork, course chapter.
+type AddNoteToEntityRequest struct {
+	EntityType     string  `json:"entity_type" validate:"required"`
+	EntityIDInt    *int    `json:"entity_id_int,omitempty" validate:"omitempty,gt=0"`
+	EntityIDUUID   *string `json:"entity_id_uuid,omitempty" validate:"omitempty,uuid"`
+	EntityIDString *string `json:"entity_id_string,omitempty"`
+	Title          string  `json:"title" validate:"required,max=255"`
+	Content        string  `json:"content" validate:"required"`
+}
+
 // Data to add a link to a note
 type AddLinkToNoteData struct {
 	LinkedEntityType     string  `json:"linked_entity_type" validate:"required"`
