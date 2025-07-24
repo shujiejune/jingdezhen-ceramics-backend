@@ -2,8 +2,8 @@ package models
 
 import "time"
 
-// QuizContent defines the structure for a "quiz" content block.
-type QuizContent struct {
+// Quiz defines the structure for a "quiz" content block.
+type Quiz struct {
 	ID        int64      `json:"id" db:"id"`
 	Title     string     `json:"title" db:"title"`
 	Questions []Question `json:"questions"`

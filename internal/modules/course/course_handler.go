@@ -139,7 +139,7 @@ func (h *Handler) AddNoteToChapter(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid chapter ID"})
 	}
 
-	var req models.AddNoteToEntityRequest // Reusing this struct for simple Title/Content
+	var req models.AddNoteToEntityRequest
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid request body"})
 	}

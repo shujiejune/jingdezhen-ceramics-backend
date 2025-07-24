@@ -93,7 +93,7 @@ func (s *Service) GetChapterContent(ctx context.Context, userID string, chapterI
 	// Business Logic: Hide full content for non-enrolled users on protected chapters
 	if !isEnrolled && !chapter.AvailableForGuests {
 		chapter.ResourceLinks = nil
-		chapter.ContentBlocks = nil // Only show the preview
+		chapter.ContentBlocks = nil
 	}
 
 	// Get user progress for this specific chapter if logged in
@@ -139,14 +139,13 @@ func (s *Service) AddNoteToChapter(ctx context.Context, userID string, chapterID
 		return nil, fmt.Errorf("cannot add note to non-existent chapter: %w", err)
 	}
 
-	entityType := "course_chapter"
-	entityID := int(chapterID)
-
 	noteData := models.CreateUserNoteData{
-		Title:      data.Title,
-		Content:    data.Content,
-		EntityType: &entityType,
-		EntityID:   &entityID,
+		Title:          data.Title,
+		Content:        data.Content,
+		EntityType:     &data.EntityType,
+		EntityIDInt:    data.EntityIDInt,
+		EntityIDUUID:   data.EntityIDUUID,
+		EntityIDString: data.EntityIDString,
 	}
 	return s.userSvc.CreateUserNote(ctx, userID, noteData)
 }
@@ -317,7 +316,7 @@ func (s *Service) SubmitQuiz(ctx context.Context, userID string, chapterID int64
 		feedback = "Good effort! Review the chapter content to improve your score."
 	}
 	if hasEssay {
-		feedback += " Your essay questions are pending review."
+		feedback += " Your essay is pending review."
 	}
 
 	result := &models.QuizAttemptResult{

@@ -16,58 +16,66 @@ type Course struct {
 
 // CourseChapter represents a single chapter within a course.
 type CourseChapter struct {
-	ID                 int64  `json:"id" db:"id"`
-	CourseID           int64  `json:"course_id" db:"course_id"`
-	Title              string `json:"title" db:"title"`
-	DisplayOrder       int    `json:"display_order" db:"display_order"`
-	AvailableForGuests bool   `json:"available_to_guests" db:"available_to_guests"`
-	// User-specific progress, populated by the service layer
+	ID                 int64                 `json:"id" db:"id"`
+	CourseID           int64                 `json:"course_id" db:"course_id"`
+	Title              string                `json:"title" db:"title"`
+	DisplayOrder       int                   `json:"display_order" db:"display_order"`
+	AvailableForGuests bool                  `json:"available_for_guests" db:"available_for_guests"`
 	ProgressPercentage int                   `json:"progress_percentage" db:"-"`
 	ResourceLinks      []string              `json:"resource_links,omitempty" db:"-"`
+	ContentBlockCount  ChapterContentCount   `json:"content_block_count" db:"-"`
 	ContentBlocks      []ChapterContentBlock `json:"content_blocks,omitempty" db:"-"`
+}
+
+// ChapterContentCount stores the number of each type of content block within a chapter.
+type ChapterContentCount struct {
+	VideoCount      int `json:"video_count" db:"video_count"`
+	ReadingCount    int `json:"reading_count" db:"reading_count"`
+	QuizCount       int `json:"quiz_count" db:"quiz_count"`
+	AssignmentCount int `json:"assignment_count" db:"assignment_count"`
 }
 
 // ChapterContentBlock represents a single piece of content within a chapter.
 type ChapterContentBlock struct {
 	ID           int64  `json:"id" db:"id"`
 	ChapterID    int64  `json:"chapter_id" db:"chapter_id"`
-	Type         string `json:"type" db:"type"`       // "video", "passage", "quiz"
+	Type         string `json:"type" db:"type"`       // "video", "reading", "assignment", "quiz"
 	Content      any    `json:"content" db:"content"` // Stored as JSONB
 	DisplayOrder int    `json:"display_order" db:"display_order"`
+	IsCompleted  bool   `json:"is_completed" db:"is_completed"`
 }
 
 // --- Structs for the JSONB Content field ---
 
 // VideoContent defines the structure for a "video" content block.
 type VideoContent struct {
-	URL      string `json:"url"`
-	Duration int    `json:"duration_seconds"`
-	Title    string `json:"title,omitempty"`
+	URL           string `json:"url"`
+	Duration      int64  `json:"duration_seconds"`
+	LastStoppedAt int64  `json:"last_stopped_at"`
+	Title         string `json:"title,omitempty"`
 }
 
-// PassageContent defines the structure for a "passage" content block.
-type PassageContent struct {
+// ReadingContent defines the structure for a "reading" content block.
+type ReadingContent struct {
 	Title string `json:"title"`
 	Body  string `json:"body"`
 }
 
-// AssignmentContent defines the structure for an "assignment" content block.
+// AssignmentContent holds a reference to a separate assignments table.
 type AssignmentContent struct {
-	AssignmentID   int64      `json:"assignment_id"`
-	Description    string     `json:"description"`
-	AttachmentURLs []string   `json:"attachment_urls,omitempty"`
-	ApplyDeadline  bool       `json:"apply_deadline"`
-	Deadline       *time.Time `json:"deadline"`
+	AssignmentID int64 `json:"assignment_id"`
 }
 
-// QuizContent and SubmitQuizRequest are defined in quiz.go
+// QuizContent holds a reference to a separate quizzes table.
+type QuizContent struct {
+	QuizID int64 `json:"quiz_id"`
+}
 
 // UserChapterProgress tracks a specific user's progress in a chapter.
 type UserChapterProgress struct {
 	UserID             string     `json:"user_id" db:"user_id"`
 	ChapterID          int64      `json:"chapter_id" db:"chapter_id"`
 	ProgressPercentage int        `json:"progress_percentage" db:"progress_percentage"`
-	VideoLastStoppedAt int        `json:"video_last_stopped_at" db:"video_last_stopped_at"` // in seconds
 	CompletedAt        *time.Time `json:"completed_at,omitempty" db:"completed_at"`
 	UpdatedAt          time.Time  `json:"updated_at" db:"updated_at"`
 }
@@ -75,10 +83,4 @@ type UserChapterProgress struct {
 // UpdateProgressRequest defines the request body for updating chapter progress.
 type UpdateProgressRequest struct {
 	ProgressPercentage int `json:"progress_percentage" validate:"gte=0,lte=100"`
-	VideoLastStoppedAt int `json:"video_last_stopped_at" validate:"gte=0"`
-}
-
-// SubmitAssignmentRequest defines the request body for submitting a quiz.
-type SubmitAssignmentRequest struct {
-	Answers map[string]any `json:"answers" validate:"required"` // Flexible map for assignment answers
 }
