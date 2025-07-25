@@ -49,6 +49,18 @@ func (s *Service) GetCourseDetails(ctx context.Context, userID string, courseID 
 		return nil, fmt.Errorf("service.GetCourseDetails.FindCourse: %w", err)
 	}
 
+	isEnrolled := false
+	if userID != "" {
+		isEnrolled, err = s.repo.CheckUserEnrollment(ctx, userID, courseID)
+		if err != nil {
+			return nil, fmt.Errorf("service.GetCourseDetails.CheckEnrollment: %w", err)
+		}
+	}
+
+	if isEnrolled {
+		go s.repo.UpdateLastVisitedAt(context.Background(), userID, courseID)
+	}
+
 	chapters, err := s.repo.FindChaptersByCourseID(ctx, courseID)
 	if err != nil {
 		return nil, fmt.Errorf("service.GetCourseDetails.FindChapters: %w", err)
@@ -90,7 +102,7 @@ func (s *Service) GetChapterContent(ctx context.Context, userID string, chapterI
 		}
 	}
 
-	// Business Logic: Hide full content for non-enrolled users on protected chapters
+	// Hide full content for non-enrolled users on protected chapters
 	if !isEnrolled && !chapter.AvailableForGuests {
 		chapter.ResourceLinks = nil
 		chapter.ContentBlocks = nil

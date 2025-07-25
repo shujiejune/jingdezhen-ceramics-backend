@@ -14,6 +14,14 @@ type Course struct {
 	Chapters     []CourseChapter `json:"chapters,omitempty" db:"-"`
 }
 
+// UserEnrollment represents the relationship between a user and a course.
+type UserEnrollment struct {
+	UserID        string    `json:"user_id" db:"user_id"`
+	CourseID      int64     `json:"course_id" db:"course_id"`
+	EnrolledAt    time.Time `json:"enrolled_at" db:"enrolled_at"`
+	LastVisitedAt time.Time `json:"last_visited_at" db:"last_visited_at"`
+}
+
 // CourseChapter represents a single chapter within a course.
 type CourseChapter struct {
 	ID                 int64                 `json:"id" db:"id"`
@@ -42,16 +50,17 @@ type ChapterContentBlock struct {
 	Type         string `json:"type" db:"type"`       // "video", "reading", "assignment", "quiz"
 	Content      any    `json:"content" db:"content"` // Stored as JSONB
 	DisplayOrder int    `json:"display_order" db:"display_order"`
-	IsCompleted  bool   `json:"is_completed" db:"is_completed"`
+	IsCompleted  bool   `json:"is_completed" db:"-"`
 }
 
 // --- Structs for the JSONB Content field ---
 
 // VideoContent defines the structure for a "video" content block.
+// LastStoppedAt(out): forms the response to be sent back to the frontend.
 type VideoContent struct {
 	URL           string `json:"url"`
 	Duration      int64  `json:"duration_seconds"`
-	LastStoppedAt int64  `json:"last_stopped_at"`
+	LastStoppedAt int64  `json:"last_stopped_at" db:"-"`
 	Title         string `json:"title,omitempty"`
 }
 
@@ -80,7 +89,16 @@ type UserChapterProgress struct {
 	UpdatedAt          time.Time  `json:"updated_at" db:"updated_at"`
 }
 
-// UpdateProgressRequest defines the request body for updating chapter progress.
-type UpdateProgressRequest struct {
-	ProgressPercentage int `json:"progress_percentage" validate:"gte=0,lte=100"`
+// UserVideoProgress tracks a user's specific progress within a single video content block.
+// LastStoppedAt(store): represents the row in user_video_progress database table.
+type UserVideoProgress struct {
+	UserID         string `json:"user_id" db:"user_id"`
+	ContentBlockID int64  `json:"content_block_id" db:"content_block_id"`
+	LastStoppedAt  int64  `json:"last_stopped_at" db:"last_stopped_at"` // in seconds
+}
+
+// UpdateVideoProgressRequest defines the request body for updating video progress.
+// LastStoppedAt(in): represents how the new progress value is transported from the client to the server.
+type UpdateVideoProgressRequest struct {
+	LastStoppedAt int64 `json:"last_stopped_at" validate:"gte=0"`
 }

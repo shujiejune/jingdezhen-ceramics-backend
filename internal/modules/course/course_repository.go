@@ -2,10 +2,12 @@ package course
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"jingdezhen-ceramics-backend/internal/models"
+	"log"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -24,9 +26,11 @@ type RepositoryInterface interface {
 	FindCourseByID(ctx context.Context, courseID int64) (*models.Course, error)
 	FindChaptersByCourseID(ctx context.Context, courseID int64) ([]models.CourseChapter, error)
 	FindChapterByID(ctx context.Context, chapterID int64) (*models.CourseChapter, error)
+	FindAssignmentByID(ctx context.Context, assignmentID int64) (*models.AssignmentContent, error)
 	FindQuizWithAnswersByID(ctx context.Context, quizID int64) (*models.QuizContent, error)
 	CheckUserEnrollment(ctx context.Context, userID string, courseID int64) (bool, error)
 	EnrollUserInCourse(ctx context.Context, userID string, courseID int64) error
+	UpdateLastVisitedAt(ctx context.Context, userID string, courseID int64) error
 	GetUserProgressForChapters(ctx context.Context, userID string, chapterIDs []int64) (map[int64]models.UserChapterProgress, error)
 	UpdateUserProgress(ctx context.Context, userID string, chapterID int64, progress models.UpdateProgressRequest) error
 	SaveQuizAttempt(ctx context.Context, attempt models.QuizAttempt) (*models.QuizAttempt, error)
@@ -37,13 +41,42 @@ type Repository struct {
 	executor DBExecutor
 }
 
+type Scannable interface {
+	Scan(dest ...any) error
+}
+
 func NewRepository(db *pgxpool.Pool) RepositoryInterface {
 	return &Repository{db: db, executor: db}
 }
 
+func (r *Repository) scanCourse(row Scannable) (*models.Course, error) {
+	var course models.Course
+	var instructorID sql.NullString
+
+	err := row.Scan(
+		&course.ID,
+		&course.Title,
+		&course.Description,
+		&instructorID,
+		&course.ThumbnailURL,
+		&course.CreatedAt,
+		&course.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if instructorID.Valid {
+		course.InstructorID = &instructorID.String
+	} else {
+		course.InstructorID = nil
+	}
+
+	return &course, nil
+}
+
 func (r *Repository) FindAllCourses(ctx context.Context) ([]models.Course, error) {
 	courses := []models.Course{}
-	query := `SELECT id, title, description, thumbnail_url, created_at, updated_at FROM courses ORDER BY created_at ASC`
+	query := `SELECT id, title, description, instructor_id, thumbnail_url, created_at, updated_at FROM courses ORDER BY created_at ASC`
 	rows, err := r.executor.Query(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("repository.FindAllCourses.Query: %w", err)
@@ -51,32 +84,32 @@ func (r *Repository) FindAllCourses(ctx context.Context) ([]models.Course, error
 	defer rows.Close()
 
 	for rows.Next() {
-		var course models.Course
-		if err := rows.Scan(&course.ID, &course.Title, &course.Description, &course.ThumbnailURL, &course.CreatedAt, &course.UpdatedAt); err != nil {
+		course, err := r.scanCourse(rows)
+		if err != nil {
 			return nil, fmt.Errorf("repository.FindAllCourses.Scan: %w", err)
 		}
-		courses = append(courses, course)
+		courses = append(courses, *course)
 	}
 	return courses, nil
 }
 
 func (r *Repository) FindCourseByID(ctx context.Context, courseID int64) (*models.Course, error) {
-	var course models.Course
 	query := `SELECT id, title, description, thumbnail_url, created_at, updated_at FROM courses WHERE id = $1`
-	err := r.executor.QueryRow(ctx, query, courseID).Scan(&course.ID, &course.Title, &course.Description, &course.ThumbnailURL, &course.CreatedAt, &course.UpdatedAt)
+	row := r.executor.QueryRow(ctx, query, courseID)
+	course, err := r.scanCourse(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, models.ErrNotFound
 		}
 		return nil, fmt.Errorf("repository.FindCourseByID: %w", err)
 	}
-	return &course, nil
+	return course, nil
 }
 
 func (r *Repository) FindChaptersByCourseID(ctx context.Context, courseID int64) ([]models.CourseChapter, error) {
 	chapters := []models.CourseChapter{}
 	// Note: We don't select full content here for efficiency. Full content is fetched on demand.
-	query := `SELECT id, course_id, title, display_order, content_preview FROM course_chapters WHERE course_id = $1 ORDER BY display_order ASC`
+	query := `SELECT id, title, display_order, available_for_guests, content_block_count FROM course_chapters WHERE course_id = $1 ORDER BY display_order ASC`
 	rows, err := r.executor.Query(ctx, query, courseID)
 	if err != nil {
 		return nil, fmt.Errorf("repository.FindChaptersByCourseID.Query: %w", err)
@@ -85,7 +118,7 @@ func (r *Repository) FindChaptersByCourseID(ctx context.Context, courseID int64)
 
 	for rows.Next() {
 		var chapter models.CourseChapter
-		if err := rows.Scan(&chapter.ID, &chapter.CourseID, &chapter.Title, &chapter.DisplayOrder, &chapter.ContentPreview); err != nil {
+		if err := rows.Scan(&chapter.ID, &chapter.Title, &chapter.DisplayOrder, &chapter.AvailableForGuests, &chapter.ContentBlockCount); err != nil {
 			return nil, fmt.Errorf("repository.FindChaptersByCourseID.Scan: %w", err)
 		}
 		chapters = append(chapters, chapter)
@@ -95,10 +128,9 @@ func (r *Repository) FindChaptersByCourseID(ctx context.Context, courseID int64)
 
 func (r *Repository) FindChapterByID(ctx context.Context, chapterID int64) (*models.CourseChapter, error) {
 	var chapter models.CourseChapter
-	query := `SELECT id, course_id, title, display_order, video_url, content, content_preview FROM course_chapters WHERE id = $1`
+	query := `SELECT id, title, available_for_guests FROM course_chapters WHERE id = $1`
 	err := r.executor.QueryRow(ctx, query, chapterID).Scan(
-		&chapter.ID, &chapter.CourseID, &chapter.Title, &chapter.DisplayOrder,
-		&chapter.VideoURL, &chapter.Content, &chapter.ContentPreview,
+		&chapter.ID, &chapter.Title, &chapter.AvailableForGuests,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -107,6 +139,71 @@ func (r *Repository) FindChapterByID(ctx context.Context, chapterID int64) (*mod
 		return nil, fmt.Errorf("repository.FindChapterByID: %w", err)
 	}
 	return &chapter, nil
+}
+
+func (r *Repository) FindContentBlocksByChapterID(ctx context.Context, chapterID int64) ([]models.ChapterContentBlock, error) {
+	blocks := []models.ChapterContentBlock{}
+	query := `
+		SELECT id, chapter_id, type, content, display_order
+		FROM chapter_content_blocks
+		WHERE chapter_id = $1
+		ORDER BY display_order ASC
+	`
+	rows, err := r.executor.Query(ctx, query, chapterID)
+	if err != nil {
+		return nil, fmt.Errorf("repository.FindContentBlocksByChapterID: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var block models.ChapterContentBlock
+		var contentJSON []byte // Scan the raw JSONB into a byte slice
+
+		if err := rows.Scan(&block.ID, &block.ChapterID, &block.Type, &contentJSON, &block.DisplayOrder); err != nil {
+			return nil, fmt.Errorf("repository.FindContentBlocksByChapterID.Scan: %w", err)
+		}
+
+		// Unmarshal into the correct struct based on the 'type' field.
+		switch block.Type {
+		case "video":
+			var videoContent models.VideoContent
+			if err := json.Unmarshal(contentJSON, &videoContent); err != nil {
+				log.Printf("WARN: could not unmarshal video content for block %d: %v", block.ID, err)
+				continue // Skip this block if content is malformed
+			}
+			block.Content = videoContent
+		case "reading":
+			var readingContent models.ReadingContent
+			if err := json.Unmarshal(contentJSON, &readingContent); err != nil {
+				log.Printf("WARN: could not unmarshal reading content for block %d: %v", block.ID, err)
+				continue
+			}
+			block.Content = readingContent
+		case "assignment":
+			var assignmentContent models.AssignmentContent
+			if err := json.Unmarshal(contentJSON, &assignmentContent); err != nil {
+				log.Printf("WARN: could not unmarshal assignment content for block %d: %v", block.ID, err)
+				continue
+			}
+			block.Content = assignmentContent
+		case "quiz":
+			var quizContent models.QuizContent
+			if err := json.Unmarshal(contentJSON, &quizContent); err != nil {
+				log.Printf("WARN: could not unmarshal quiz content for block %d: %v", block.ID, err)
+				continue
+			}
+			block.Content = quizContent
+		default:
+			log.Printf("WARN: unknown content block type '%s' for block %d", block.Type, block.ID)
+			continue
+		}
+
+		blocks = append(blocks, block)
+	}
+	return blocks, nil
+}
+
+func (r *Repository) FindAssignmentByID(ctx context.Context, assignmentID int64) (*models.AssignmentContent, error) {
 }
 
 // FindQuizWithAnswersByID retrieves the full quiz structure, including correct answers, from the database.
@@ -148,6 +245,31 @@ func (r *Repository) EnrollUserInCourse(ctx context.Context, userID string, cour
 	if err != nil {
 		return fmt.Errorf("repository.EnrollUserInCourse: %w", err)
 	}
+	return nil
+}
+
+func (r *Repository) UpdateLastVisitedAt(ctx context.Context, userID string, courseID int64) error {
+	query := `
+		UPDATE user_enrollments
+		SET last_visited_at = NOW()
+		WHERE user_id = $1 AND course_id = $2
+	`
+	// Use Exec for statements that don't return rows.
+	cmdTag, err := r.executor.Exec(ctx, query, userID, courseID)
+	if err != nil {
+		// In a background task, we should log the error rather than returning it,
+		// as there's no calling function to handle it.
+		// However, for a clean repository method, we return the error.
+		// The service layer, which calls this in a goroutine, will just let it finish.
+		return fmt.Errorf("repository.UpdateLastVisitedAt: %w", err)
+	}
+
+	if cmdTag.RowsAffected() == 0 {
+		// This means the enrollment record wasn't found. This is an unexpected state
+		// if this function is called after an enrollment check, so it's worth noting.
+		return fmt.Errorf("repository.UpdateLastVisitedAt: no enrollment found for user %s in course %d", userID, courseID)
+	}
+
 	return nil
 }
 
