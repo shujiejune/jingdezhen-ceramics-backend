@@ -10,11 +10,13 @@ type Config struct {
 	DatabaseURL             string `mapstructure:"DATABASE_URL"`
 	JWTSecret               string `mapstructure:"JWT_SECRET"`
 	ClientOrigin            string `mapstructure:"CLIENT_ORIGIN"`
-	AdminEmail              string `mapstructure:"ADMIN_EMAIL"`
 	GoogleOAuthClientID     string `mapstructure:"GOOGLE_OAUTH_CLIENT_ID"`
 	GoogleOAuthClientSecret string `mapstructure:"GOOGLE_OAUTH_CLIENT_SECRET"`
 	GoogleOAuthRedirectURL  string `mapstructure:"GOOGLE_OAUTH_REDIRECT_URL"`
-	// Add other configurations as needed
+	AWSRegion               string `mapstructure:"AWS_REGION"`
+	AWSAccessKeyID          string `mapstructure:"AWS_ACCESS_KEY_ID"`
+	AWSSecretAccessKey      string `mapstructure:"AWS_SECRET_ACCESS_KEY"`
+	AdminEmail              string `mapstructure:"ADMIN_EMAIL"`
 }
 
 func LoadConfig(path string) (config Config, err error) {

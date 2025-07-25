@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"jingdezhen-ceramics-backend/internal/api"
+	"jingdezhen-ceramics-backend/internal/config"
 	"jingdezhen-ceramics-backend/internal/modules/ceramicstory"
-	"jingdezhen-ceramics-backend/internal/modules/config"
 	"jingdezhen-ceramics-backend/internal/modules/course"
 	"jingdezhen-ceramics-backend/internal/modules/engage"
 	"jingdezhen-ceramics-backend/internal/modules/forum"
@@ -76,13 +76,14 @@ func main() {
 	}
 
 	// 2. Initialize other services
-	emailService := email.NewSMTPService(
-		cfg.SMTPServer, // Assuming these are in your config
-		cfg.SMTPPort,
-		cfg.SMTPUser,
-		cfg.SMTPPassword,
-		cfg.EmailFromAddress,
-	)
+	sesSender, err := email.NewSESV2Sender(context.Background(), cfg.AWSRegion, cfg.AdminEmail)
+	if err != nil {
+		log.Fatalf("Failed to create SES sender: %v", err)
+	}
+	templateManager, err := email.NewTemplateManager()
+	if err != nil {
+		log.Fatalf("Failed to parse email templates: %v", err)
+	}
 
 	forumRepo := forum.NewRepository(dbPool)
 	forumService := forum.NewService(forumRepo)
@@ -92,7 +93,8 @@ func main() {
 	userService := user.NewService(
 		userRepo,
 		forumService,
-		emailService,
+		sesSender,
+		templateManager,
 		cfg.JWTSecret,
 		cfg.ClientOrigin,
 		cfg.AdminEmail,
@@ -107,7 +109,7 @@ func main() {
 	ceramicStoryHandler := ceramicstory.NewHandler(ceramicStoryService)
 
 	galleryRepo := gallery.NewRepository(dbPool)
-	galleryService := gallery.NewService(galleryRepo) // galleryService might also need e.g. userRepo if favorites involve user data directly in service
+	galleryService := gallery.NewService(galleryRepo, userService)
 	galleryHandler := gallery.NewHandler(galleryService)
 
 	engageRepo := engage.NewRepository(dbPool)
@@ -115,7 +117,7 @@ func main() {
 	engageHandler := engage.NewHandler(engageService)
 
 	courseRepo := course.NewRepository(dbPool)
-	courseService := course.NewService(courseRepo)
+	courseService := course.NewService(courseRepo, userService)
 	courseHandler := course.NewHandler(courseService)
 
 	portfolioRepo := portfolio.NewRepository(dbPool)

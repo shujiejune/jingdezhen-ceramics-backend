@@ -55,6 +55,7 @@ type ChapterContentCount struct {
 type ChapterContentBlock struct {
 	ID           int64  `json:"id" db:"id"`
 	ChapterID    int64  `json:"chapter_id" db:"chapter_id"`
+	CourseID     int64  `json:"course_id" db:"course_id"`
 	Type         string `json:"type" db:"type"`       // "video", "reading", "assignment", "quiz"
 	Content      any    `json:"content" db:"content"` // Stored as JSONB
 	DisplayOrder int    `json:"display_order" db:"display_order"`

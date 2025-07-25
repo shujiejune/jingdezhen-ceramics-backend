@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"jingdezhen-ceramics-backend/internal/models"
 	"jingdezhen-ceramics-backend/internal/modules/user"
+	"log"
 	"math"
 	"strings"
 	"time"
@@ -12,7 +13,7 @@ import (
 
 type ServiceInterface interface {
 	GetAllCourses(ctx context.Context) ([]models.Course, error)
-	GetQuizDetails(ctx context.Context, quizID int64) (*models.QuizContent, error)
+	GetQuizDetails(ctx context.Context, quizID int64) (*models.Quiz, error)
 	GetCourseDetails(ctx context.Context, userID string, courseID int64) (*models.Course, error)
 	GetChapterContent(ctx context.Context, userID string, chapterID int64) (*models.CourseChapter, error)
 	EnrollUserInCourse(ctx context.Context, userID string, courseID int64) error
@@ -36,7 +37,7 @@ func (s *Service) GetAllCourses(ctx context.Context) ([]models.Course, error) {
 	return s.repo.FindAllCourses(ctx)
 }
 
-func (s *Service) GetQuizDetails(ctx context.Context, quizID int64) (*models.QuizContent, error) {
+func (s *Service) GetQuizDetails(ctx context.Context, quizID int64) (*models.Quiz, error) {
 	quiz, err := s.repo.FindQuizWithAnswersByID(ctx, quizID)
 	if err != nil {
 		return nil, fmt.Errorf("service.GetQuizDetails: %w", err)
@@ -155,7 +156,7 @@ func (s *Service) MarkContentBlockComplete(ctx context.Context, userID string, c
 	}
 
 	// 3. Call the repository to save the completion record.
-	err = s.repo.SaveContentBlockCompletion(ctx, userID, blockID)
+	_, err = s.repo.SaveContentBlockCompletion(ctx, userID, blockID)
 	if err != nil {
 		return fmt.Errorf("service.MarkContentBlockComplete.SaveCompletion: %w", err)
 	}
@@ -183,12 +184,7 @@ func (s *Service) UpdateVideoProgress(ctx context.Context, userID string, blockI
 		return fmt.Errorf("%w: cannot update video progress on a non-video block of type %s", models.ErrInvalidOperation, block.Type)
 	}
 
-	chapterID := block.ChapterID
-	chapter, err := s.repo.FindChapterByID(ctx, chapterID)
-	if err != nil {
-		return fmt.Errorf("service.UpdateVideoProgress.FindChapter: %w", err)
-	}
-	isEnrolled, err := s.repo.CheckUserEnrollment(ctx, userID, chapter.CourseID)
+	isEnrolled, err := s.repo.CheckUserEnrollment(ctx, userID, block.CourseID)
 	if err != nil {
 		return fmt.Errorf("service.UpdateVideoProgress.CheckEnrollment: %w", err)
 	}
@@ -197,7 +193,25 @@ func (s *Service) UpdateVideoProgress(ctx context.Context, userID string, blockI
 	}
 
 	// Call the repository to save the video progress.
-	return s.repo.SaveVideoProgress(ctx, userID, blockID, data.LastStoppedAt)
+	_, err = s.repo.SaveVideoProgress(ctx, userID, blockID, data.LastStoppedAt)
+	if err != nil {
+		return fmt.Errorf("service.UpdateVideoProgress.SaveProgress: %w", err)
+	}
+
+	// After saving, check if the video is now complete.
+	if videoContent, ok := block.Content.(models.VideoContent); ok {
+		// Add a small buffer (e.g., 5 seconds) to account for player inaccuracies.
+		if videoContent.Duration > 0 && data.LastStoppedAt >= videoContent.Duration-5 {
+			fmt.Printf("INFO: Video block %d completed for user %s. Auto-marking as complete.\n", blockID, userID)
+			// Call the MarkContentBlockComplete logic.
+			if err := s.MarkContentBlockComplete(ctx, userID, block.CourseID, block.ChapterID, blockID); err != nil {
+				// Log this error, but don't fail the main request, as the progress was saved.
+				log.Printf("WARN: Failed to auto-mark video as complete after finishing: %v", err)
+			}
+		}
+	}
+
+	return nil
 }
 
 func (s *Service) AddNoteToChapter(ctx context.Context, userID string, chapterID int64, data models.AddNoteToEntityRequest) (*models.UserNote, error) {
