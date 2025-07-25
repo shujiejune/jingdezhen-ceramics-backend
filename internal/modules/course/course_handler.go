@@ -100,17 +100,54 @@ func (h *Handler) GetFullChapterContentForEnrolled(c echo.Context) error {
 	return h.GetChapterContent(c)
 }
 
-func (h *Handler) UpdateProgress(c echo.Context) error {
+// MarkContentBlockComplete handles requests to mark a passive content block (video, reading) as complete.
+// Corresponds to: POST /courses/:course_id/chapters/:chapter_id/blocks/:block_id/complete
+func (h *Handler) MarkContentBlockComplete(c echo.Context) error {
 	userID, err := utils.GetUserIDFromContext(c)
 	if err != nil {
 		return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: err.Error()})
+	}
+	courseID, err := strconv.ParseInt(c.Param("course_id"), 10, 64)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid course ID"})
 	}
 	chapterID, err := strconv.ParseInt(c.Param("chapter_id"), 10, 64)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid chapter ID"})
 	}
+	blockID, err := strconv.ParseInt(c.Param("block_id"), 10, 64)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid content block ID"})
+	}
 
-	var req models.UpdateProgressRequest
+	// This request has no body. The action is in the URL.
+	if err := h.service.MarkContentBlockComplete(c.Request().Context(), userID, courseID, chapterID, blockID); err != nil {
+		if errors.Is(err, models.ErrForbidden) {
+			return c.JSON(http.StatusForbidden, models.ErrorResponse{Message: "You must be enrolled to mark progress"})
+		}
+		if errors.Is(err, models.ErrInvalidOperation) {
+			return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: err.Error()})
+		}
+		c.Logger().Error("Handler.MarkContentBlockComplete: ", err)
+		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to update progress"})
+	}
+
+	return c.NoContent(http.StatusOK)
+}
+
+// UpdateVideoProgress handles requests to save the last stopped-at time for a video.
+// Corresponds to: POST /courses/:course_id/chapters/:chapter_id/blocks/:block_id/video-progress
+func (h *Handler) UpdateVideoProgress(c echo.Context) error {
+	userID, err := utils.GetUserIDFromContext(c)
+	if err != nil {
+		return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: err.Error()})
+	}
+	blockID, err := strconv.ParseInt(c.Param("block_id"), 10, 64)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid content block ID"})
+	}
+
+	var req models.UpdateVideoProgressRequest
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid request body"})
 	}
@@ -118,12 +155,15 @@ func (h *Handler) UpdateProgress(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Validation failed: " + err.Error()})
 	}
 
-	if err := h.service.UpdateUserProgress(c.Request().Context(), userID, chapterID, req); err != nil {
+	if err := h.service.UpdateVideoProgress(c.Request().Context(), userID, blockID, req); err != nil {
 		if errors.Is(err, models.ErrForbidden) {
-			return c.JSON(http.StatusForbidden, models.ErrorResponse{Message: "You must be enrolled to update progress"})
+			return c.JSON(http.StatusForbidden, models.ErrorResponse{Message: "You must be enrolled to update video progress"})
 		}
-		c.Logger().Error("Handler.UpdateProgress: ", err)
-		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to update progress"})
+		if errors.Is(err, models.ErrInvalidOperation) {
+			return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: err.Error()})
+		}
+		c.Logger().Error("Handler.UpdateVideoProgress: ", err)
+		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to update video progress"})
 	}
 
 	return c.NoContent(http.StatusOK)

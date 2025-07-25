@@ -114,7 +114,8 @@ func SetupRoutes(
 		{
 			authCourseGroup.POST("/:course_id/enroll", courseHandler.EnrollCourse)
 			authCourseGroup.GET("/:course_id/chapters/:chapter_id/full", courseHandler.GetFullChapterContentForEnrolled)
-			authCourseGroup.POST("/:course_id/chapters/:chapter_id/progress", courseHandler.UpdateProgress)
+			authCourseGroup.POST("/:course_id/chapters/:chapter_id/blocks/:block_id/complete", courseHandler.MarkContentBlockComplete)
+			authCourseGroup.POST("/:course_id/chapters/:chapter_id/blocks/:block_id/video-progress", courseHandler.UpdateVideoProgress)
 			authCourseGroup.POST("/:course_id/chapters/:chapter_id/notes", courseHandler.AddNoteToChapter)
 			authCourseGroup.POST("/:course_id/chapters/:chapter_id/quizzes/:assignment_id/submit", courseHandler.SubmitAssignment)
 			authCourseGroup.POST("/:course_id/chapters/:chapter_id/quizzes/:quiz_id/submit", courseHandler.SubmitQuiz)

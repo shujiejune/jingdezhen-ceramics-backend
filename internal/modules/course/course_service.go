@@ -16,7 +16,8 @@ type ServiceInterface interface {
 	GetCourseDetails(ctx context.Context, userID string, courseID int64) (*models.Course, error)
 	GetChapterContent(ctx context.Context, userID string, chapterID int64) (*models.CourseChapter, error)
 	EnrollUserInCourse(ctx context.Context, userID string, courseID int64) error
-	UpdateUserProgress(ctx context.Context, userID string, chapterID int64, progress models.UpdateProgressRequest) error
+	MarkContentBlockComplete(ctx context.Context, userID string, courseID, chapterID, blockID int64) error
+	UpdateVideoProgress(ctx context.Context, userID string, blockID int64, data models.UpdateVideoProgressRequest) error
 	AddNoteToChapter(ctx context.Context, userID string, chapterID int64, data models.AddNoteToEntityRequest) (*models.UserNote, error)
 	SubmitAssignment(ctx context.Context, userID string, chapterID int64, assignmentID int64, data models.SubmitAssignmentRequest) (any, error)
 	SubmitQuiz(ctx context.Context, userID string, chapterID int64, quizID int64, data models.SubmitQuizRequest) (any, error)
@@ -128,20 +129,75 @@ func (s *Service) EnrollUserInCourse(ctx context.Context, userID string, courseI
 	return s.repo.EnrollUserInCourse(ctx, userID, courseID)
 }
 
-func (s *Service) UpdateUserProgress(ctx context.Context, userID string, chapterID int64, progress models.UpdateProgressRequest) error {
-	// Business logic: check if user is enrolled in the course this chapter belongs to
-	chapter, err := s.repo.FindChapterByID(ctx, chapterID)
+// MarkContentBlockComplete handles the logic for when a user marks a content block as done.
+func (s *Service) MarkContentBlockComplete(ctx context.Context, userID string, courseID, chapterID, blockID int64) error {
+	// 1. Check if the user is actually enrolled in the course.
+	isEnrolled, err := s.repo.CheckUserEnrollment(ctx, userID, courseID)
+	if err != nil {
+		return fmt.Errorf("service.MarkContentBlockComplete.CheckEnrollment: %w", err)
+	}
+	if !isEnrolled {
+		return models.ErrForbidden // User must be enrolled to mark progress.
+	}
+
+	// 2. Check if the block belongs to the chapter.
+	// This prevents a user from sending a valid blockID with a mismatched chapterID.
+	block, err := s.repo.FindContentBlockByID(ctx, blockID)
 	if err != nil {
 		return err
+	}
+	if block.ChapterID != chapterID {
+		return models.ErrForbidden
+	}
+
+	if block.Type != "video" && block.Type != "reading" {
+		return fmt.Errorf("%w: cannot mark a %s block as complete via this endpoint", models.ErrInvalidOperation, block.Type)
+	}
+
+	// 3. Call the repository to save the completion record.
+	err = s.repo.SaveContentBlockCompletion(ctx, userID, blockID)
+	if err != nil {
+		return fmt.Errorf("service.MarkContentBlockComplete.SaveCompletion: %w", err)
+	}
+
+	// 4. After a block is completed, recalculate the overall chapter progress percentage.
+	// This is a crucial step to keep the data in sync.
+	err = s.repo.CalculateChapterProgress(ctx, userID, chapterID)
+	if err != nil {
+		// Log the error, but don't fail the whole request, as the main action succeeded.
+		log.Printf("WARN: Failed to recalculate chapter progress for user %s, chapter %d: %v", userID, chapterID, err)
+	}
+
+	return nil
+}
+
+// UpdateVideoProgress handles saving the last stopped-at time for a video.
+func (s *Service) UpdateVideoProgress(ctx context.Context, userID string, blockID int64, data models.UpdateVideoProgressRequest) error {
+	// Check if the user is enrolled in the course this block belongs to.
+	// This requires fetching the block to find its chapter, then its course.
+	block, err := s.repo.FindContentBlockByID(ctx, blockID)
+	if err != nil {
+		return fmt.Errorf("service.UpdateVideoProgress.FindBlock: %w", err)
+	}
+	if block.Type != "video" {
+		return fmt.Errorf("%w: cannot update video progress on a non-video block of type %s", models.ErrInvalidOperation, block.Type)
+	}
+
+	chapterID := block.ChapterID
+	chapter, err := s.repo.FindChapterByID(ctx, chapterID)
+	if err != nil {
+		return fmt.Errorf("service.UpdateVideoProgress.FindChapter: %w", err)
 	}
 	isEnrolled, err := s.repo.CheckUserEnrollment(ctx, userID, chapter.CourseID)
 	if err != nil {
-		return err
+		return fmt.Errorf("service.UpdateVideoProgress.CheckEnrollment: %w", err)
 	}
 	if !isEnrolled {
-		return models.ErrForbidden // User must be enrolled to update progress
+		return models.ErrForbidden
 	}
-	return s.repo.UpdateUserProgress(ctx, userID, chapterID, progress)
+
+	// Call the repository to save the video progress.
+	return s.repo.SaveVideoProgress(ctx, userID, blockID, data.LastStoppedAt)
 }
 
 func (s *Service) AddNoteToChapter(ctx context.Context, userID string, chapterID int64, data models.AddNoteToEntityRequest) (*models.UserNote, error) {
@@ -184,7 +240,14 @@ func (s *Service) SubmitAssignment(ctx context.Context, userID string, chapterID
 	}
 
 	// 3. Submit assgnment
-	return s.repo.SubmitAssignment(ctx, userID, assignmentID, data.Answers)
+	submission := models.AssignmentSubmission{
+		AssignmentID: assignmentID,
+		UserID:       userID,
+		Answers:      data.Answers,
+		Status:       "ungraded",
+		SubmittedAt:  time.Now(),
+	}
+	return s.repo.SubmitAssignment(ctx, submission)
 }
 
 func (s *Service) SubmitQuiz(ctx context.Context, userID string, chapterID int64, quizID int64, data models.SubmitQuizRequest) (any, error) {

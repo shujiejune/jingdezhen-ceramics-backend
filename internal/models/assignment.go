@@ -22,7 +22,7 @@ type AssignmentSubmission struct {
 	// Add fields for grading later, e.g., Grade, GradedAt, GraderID, Feedback
 }
 
-// SubmitAssignmentRequest defines the request body for submitting a quiz.
+// SubmitAssignmentRequest defines the request body for submitting an assignment.
 type SubmitAssignmentRequest struct {
 	Answers map[string]any `json:"answers" validate:"required"` // Flexible map for assignment answers
 }

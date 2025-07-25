@@ -9,5 +9,6 @@ var ErrInactiveAccount = errors.New("user account is not active")
 var ErrInvalidToken = errors.New("token not found or expired")
 var ErrInvalidCredentials = errors.New("invalid credentials") // email or password provided does not match database record
 var ErrInvalidForumPostCategoryID = errors.New("invalid category of forum post")
+var ErrInvalidOperation = errors.New("the requested operation is not valid for the target resource")
 var ErrMissedDeadline = errors.New("deadline missed")
 var ErrNicknameTaken = errors.New("nickname already taken")

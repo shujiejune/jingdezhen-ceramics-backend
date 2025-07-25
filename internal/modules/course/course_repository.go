@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"jingdezhen-ceramics-backend/internal/models"
 	"log"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -26,14 +27,22 @@ type RepositoryInterface interface {
 	FindCourseByID(ctx context.Context, courseID int64) (*models.Course, error)
 	FindChaptersByCourseID(ctx context.Context, courseID int64) ([]models.CourseChapter, error)
 	FindChapterByID(ctx context.Context, chapterID int64) (*models.CourseChapter, error)
-	FindAssignmentByID(ctx context.Context, assignmentID int64) (*models.AssignmentContent, error)
-	FindQuizWithAnswersByID(ctx context.Context, quizID int64) (*models.QuizContent, error)
+	FindContentBlocksByChapterID(ctx context.Context, chapterID int64) ([]models.ChapterContentBlock, error)
+	FindContentBlockByID(ctx context.Context, blockID int64) (*models.ChapterContentBlock, error)
+	FindAssignmentByID(ctx context.Context, assignmentID int64) (*models.Assignment, error)
+	FindQuizWithAnswersByID(ctx context.Context, quizID int64) (*models.Quiz, error)
+
 	CheckUserEnrollment(ctx context.Context, userID string, courseID int64) (bool, error)
 	EnrollUserInCourse(ctx context.Context, userID string, courseID int64) error
+
 	UpdateLastVisitedAt(ctx context.Context, userID string, courseID int64) error
-	GetUserProgressForChapters(ctx context.Context, userID string, chapterIDs []int64) (map[int64]models.UserChapterProgress, error)
-	UpdateUserProgress(ctx context.Context, userID string, chapterID int64, progress models.UpdateProgressRequest) error
+	SaveContentBlockCompletion(ctx context.Context, userID string, blockID int64) (*models.ContentBlockCompletion, error)
+	SaveVideoProgress(ctx context.Context, userID string, blockID, lastStoppedAt int64) (*models.UserVideoProgress, error)
+	SubmitAssignment(ctx context.Context, submission models.AssignmentSubmission) (*models.AssignmentSubmission, error)
 	SaveQuizAttempt(ctx context.Context, attempt models.QuizAttempt) (*models.QuizAttempt, error)
+
+	GetUserProgressForChapters(ctx context.Context, userID string, chapterIDs []int64) (map[int64]models.UserChapterProgress, error)
+	CalculateChapterProgress(ctx context.Context, userID string, chapterID int64) error
 }
 
 type Repository struct {
@@ -128,9 +137,9 @@ func (r *Repository) FindChaptersByCourseID(ctx context.Context, courseID int64)
 
 func (r *Repository) FindChapterByID(ctx context.Context, chapterID int64) (*models.CourseChapter, error) {
 	var chapter models.CourseChapter
-	query := `SELECT id, title, available_for_guests FROM course_chapters WHERE id = $1`
+	query := `SELECT id, course_id, title, available_for_guests FROM course_chapters WHERE id = $1`
 	err := r.executor.QueryRow(ctx, query, chapterID).Scan(
-		&chapter.ID, &chapter.Title, &chapter.AvailableForGuests,
+		&chapter.ID, &chapter.CourseID, &chapter.Title, &chapter.AvailableForGuests,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -203,14 +212,53 @@ func (r *Repository) FindContentBlocksByChapterID(ctx context.Context, chapterID
 	return blocks, nil
 }
 
-func (r *Repository) FindAssignmentByID(ctx context.Context, assignmentID int64) (*models.AssignmentContent, error) {
+func (r *Repository) FindContentBlockByID(ctx context.Context, blockID int64) (*models.ChapterContentBlock, error) {
+	var block models.ChapterContentBlock
+
+	query := `SELECT id, chapter_id, type, content, display_order 
+	FROM course_chapter_content_blocks WHERE id = $1`
+	err := r.executor.QueryRow(ctx, query, blockID).Scan(
+		&block.ID, &block.ChapterID, &block.Type, &block.Content, &block.DisplayOrder,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, models.ErrNotFound
+		}
+		return nil, fmt.Errorf("repository.FindContentBlockByID: %w", err)
+	}
+
+	return &block, nil
+}
+
+func (r *Repository) FindAssignmentByID(ctx context.Context, assignmentID int64) (*models.Assignment, error) {
+	var asgn models.Assignment
+	var deadline sql.NullTime
+
+	query := `SELECT id, title, description, attachment_urls, apply_deadline, deadline
+	FROM assignments WHERE id = $1`
+	err := r.executor.QueryRow(ctx, query, assignmentID).Scan(
+		&asgn.ID, &asgn.Title, &asgn.AttachmentURLs, &asgn.ApplyDeadline, &deadline,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, models.ErrNotFound
+		}
+		return nil, fmt.Errorf("repository.FindAssignmentByID: %w", err)
+	}
+	if deadline.Valid {
+		asgn.Deadline = &deadline.Time
+	} else {
+		asgn.Deadline = nil
+	}
+
+	return &asgn, nil
 }
 
 // FindQuizWithAnswersByID retrieves the full quiz structure, including correct answers, from the database.
 // This should only be called by the service layer for scoring, not sent directly to the client.
-func (r *Repository) FindQuizWithAnswersByID(ctx context.Context, quizID int64) (*models.QuizContent, error) {
-	var quiz models.QuizContent
-	var questionsJSON []byte // We'll scan the JSONB data into a byte slice first
+func (r *Repository) FindQuizWithAnswersByID(ctx context.Context, quizID int64) (*models.Quiz, error) {
+	var quiz models.Quiz
+	var questionsJSON []byte // scan the JSONB data into a byte slice first
 
 	query := `SELECT id, title, questions FROM quizzes WHERE id = $1`
 	err := r.executor.QueryRow(ctx, query, quizID).Scan(&quiz.ID, &quiz.Title, &questionsJSON)
@@ -273,43 +321,78 @@ func (r *Repository) UpdateLastVisitedAt(ctx context.Context, userID string, cou
 	return nil
 }
 
-func (r *Repository) GetUserProgressForChapters(ctx context.Context, userID string, chapterIDs []int64) (map[int64]models.UserChapterProgress, error) {
-	progressMap := make(map[int64]models.UserChapterProgress)
-	if userID == "" || len(chapterIDs) == 0 {
-		return progressMap, nil
-	}
-
-	query := `SELECT chapter_id, progress_percentage, video_last_stopped_at FROM user_chapter_progress WHERE user_id = $1 AND chapter_id = ANY($2)`
-	rows, err := r.executor.Query(ctx, query, userID, chapterIDs)
+func (r *Repository) SaveContentBlockCompletion(ctx context.Context, userID string, blockID int64) (*models.ContentBlockCompletion, error) {
+	block, err := r.FindContentBlockByID(ctx, blockID)
 	if err != nil {
-		return nil, fmt.Errorf("repository.GetUserProgressForChapters: %w", err)
+		return nil, fmt.Errorf("repository.SaveContentBlockCompletion.FindContentBlock: %w", err)
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var progress models.UserChapterProgress
-		if err := rows.Scan(&progress.ChapterID, &progress.ProgressPercentage, &progress.VideoLastStoppedAt); err != nil {
-			return nil, fmt.Errorf("repository.GetUserProgressForChapters.Scan: %w", err)
-		}
-		progressMap[progress.ChapterID] = progress
+	var completion models.ContentBlockCompletion
+	query := `
+		INSERT INTO content_block_completions (user_id, content_block_id, type, completed_at)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id, user_id, content_block_id, type, completed_at
+	`
+	err = r.executor.QueryRow(ctx, query,
+		userID, blockID, block.Type, time.Now(),
+	).Scan(
+		&completion.ID,
+		&completion.UserID,
+		&completion.ContentBlockID,
+		&completion.Type,
+		&completion.CompletedAt,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("repository.SaveContentBlockCompletion: %w", err)
 	}
-	return progressMap, nil
+
+	return &completion, err
 }
 
-func (r *Repository) UpdateUserProgress(ctx context.Context, userID string, chapterID int64, progress models.UpdateProgressRequest) error {
+func (r *Repository) SaveVideoProgress(ctx context.Context, userID string, blockID, lastStoppedAt int64) (*models.UserVideoProgress, error) {
+	var progress models.UserVideoProgress
 	query := `
-		INSERT INTO user_chapter_progress (user_id, chapter_id, progress_percentage, video_last_stopped_at)
-		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (user_id, chapter_id) DO UPDATE SET
-			progress_percentage = EXCLUDED.progress_percentage,
-			video_last_stopped_at = EXCLUDED.video_last_stopped_at,
-			updated_at = NOW()
+		INSERT INTO user_video_progress (user_id, content_block_id, last_stopped_at)
+		VALUES ($1, $2, $3)
+		RETURNING id, user_id, content_block_id, last_stopped_at
 	`
-	_, err := r.executor.Exec(ctx, query, userID, chapterID, progress.ProgressPercentage, progress.VideoLastStoppedAt)
+	err := r.executor.QueryRow(ctx, query, userID, blockID, lastStoppedAt).Scan(
+		&progress.ID,
+		&progress.UserID,
+		&progress.ContentBlockID,
+		&progress.LastStoppedAt,
+	)
 	if err != nil {
-		return fmt.Errorf("repository.UpdateUserProgress: %w", err)
+		return nil, fmt.Errorf("repository.SaveVideoProgress: %w", err)
 	}
-	return nil
+
+	return &progress, nil
+}
+
+func (r *Repository) SubmitAssignment(ctx context.Context, submission models.AssignmentSubmission) (*models.AssignmentSubmission, error) {
+	answersJSON, err := json.Marshal(submission.Answers)
+	if err != nil {
+		return nil, fmt.Errorf("repository.SubmitAssignment.Marshal: %w", err)
+	}
+
+	query := `
+		INSERT INTO assignment_submissions (user_id, assignment_id, answers, status, submitted_at)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id
+	`
+	err = r.executor.QueryRow(ctx, query,
+		submission.UserID,
+		submission.AssignmentID,
+		answersJSON,
+		submission.Status,
+		submission.SubmittedAt,
+	).Scan(&submission.ID)
+
+	if err != nil {
+		return nil, fmt.Errorf("repository.SubmitAssignment.Insert: %w", err)
+	}
+
+	return &submission, nil
 }
 
 // SaveQuizAttempt inserts a new record of a user's quiz submission into the database.
@@ -339,4 +422,36 @@ func (r *Repository) SaveQuizAttempt(ctx context.Context, attempt models.QuizAtt
 	}
 
 	return &attempt, nil
+}
+
+func (r *Repository) GetUserProgressForChapters(ctx context.Context, userID string, chapterIDs []int64) (map[int64]models.UserChapterProgress, error) {
+	progressMap := make(map[int64]models.UserChapterProgress)
+	if userID == "" || len(chapterIDs) == 0 {
+		return progressMap, nil
+	}
+
+	query := `SELECT chapter_id, progress_percentage, completed_at, updated_at FROM user_chapter_progress WHERE user_id = $1 AND chapter_id = ANY($2)`
+	rows, err := r.executor.Query(ctx, query, userID, chapterIDs)
+	if err != nil {
+		return nil, fmt.Errorf("repository.GetUserProgressForChapters: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var progress models.UserChapterProgress
+		if err := rows.Scan(
+			&progress.ChapterID,
+			&progress.ProgressPercentage,
+			&progress.CompletedAt,
+			&progress.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("repository.GetUserProgressForChapters.Scan: %w", err)
+		}
+		progressMap[progress.ChapterID] = progress
+	}
+	return progressMap, nil
+}
+
+func (r *Repository) CalculateChapterProgress(ctx context.Context, userID string, chapterID int64) error {
+
 }
