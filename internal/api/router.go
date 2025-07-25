@@ -52,6 +52,7 @@ func SetupRoutes(
 	{
 		profileGroup.GET("", userHandler.GetProfile)
 		profileGroup.PUT("", userHandler.UpdateProfile)
+		profileGroup.GET("/courses", userHandler.GetEnrolledCourses)
 		profileGroup.GET("/notifications", userHandler.GetNotifications)
 		profileGroup.GET("/notes", userHandler.GetUserNotes)
 		profileGroup.POST("/notes", userHandler.CreateUserNote)

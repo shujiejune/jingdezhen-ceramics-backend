@@ -30,6 +30,9 @@ type RepositoryInterface interface {
 	ActivateUser(ctx context.Context, token string) (*models.User, error)
 	CreateOAuthUser(ctx context.Context, user *models.User) (*models.User, error) // Assuming you might add direct user creation
 	Update(ctx context.Context, userID string, updateData models.UserUpdateData) (*models.User, error)
+
+	FindEnrolledCoursesByUserID(ctx context.Context, userID string) ([]models.EnrolledCourseResponse, error)
+
 	ListAll(ctx context.Context, page, limit int) ([]models.User, int, error) // For admin: list users
 	UpdateRole(ctx context.Context, userID string, newRole string) error      // For admin: update role
 
@@ -364,6 +367,44 @@ func (r *Repository) Update(ctx context.Context, userID string, data models.User
 		return nil, fmt.Errorf("repository.UpdateUser: %w", err)
 	}
 	return updatedUser, nil
+}
+
+func (r *Repository) FindEnrolledCoursesByUserID(ctx context.Context, userID string) ([]models.EnrolledCourseResponse, error) {
+	courses := []models.EnrolledCourseResponse{}
+	query := `
+		SELECT
+			c.id,
+			c.title,
+			c.thumbnail_url,
+			ue.last_visited_at
+		FROM courses c
+		JOIN user_enrollments ue ON c.id = ue.course_id
+		WHERE ue.user_id = $1
+		ORDER BY ue.last_visited_at DESC
+	`
+	rows, err := r.executor.Query(ctx, query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("repository.FindEnrolledCoursesByUserID.Query: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var course models.EnrolledCourseResponse
+		if err := rows.Scan(
+			&course.ID,
+			&course.Title,
+			&course.ThumbnailURL,
+			&course.LastVisitedAt,
+		); err != nil {
+			return nil, fmt.Errorf("repository.FindEnrolledCoursesByUserID.Scan: %w", err)
+		}
+		courses = append(courses, course)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("repository.FindEnrolledCoursesByUserID.RowsErr: %w", err)
+	}
+
+	return courses, nil
 }
 
 // --- Admin specific methods ---

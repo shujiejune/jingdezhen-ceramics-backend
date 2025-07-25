@@ -22,6 +22,14 @@ type UserEnrollment struct {
 	LastVisitedAt time.Time `json:"last_visited_at" db:"last_visited_at"`
 }
 
+// EnrolledCourseResponse is for listing enrolled courses by most recently visited order in user profile.
+type EnrolledCourseResponse struct {
+	ID            int64     `json:"id"`
+	Title         string    `json:"title"`
+	ThumbnailURL  string    `json:"thumbnail_url"`
+	LastVisitedAt time.Time `json:"last_visited_at"`
+}
+
 // CourseChapter represents a single chapter within a course.
 type CourseChapter struct {
 	ID                 int64                 `json:"id" db:"id"`

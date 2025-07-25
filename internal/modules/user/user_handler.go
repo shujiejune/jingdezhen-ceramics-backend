@@ -307,6 +307,26 @@ func (h *Handler) SubmitContactForm(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]string{"message": "Contact form submitted successfully"})
 }
 
+func (h *Handler) GetEnrolledCourses(c echo.Context) error {
+	userID, err := utils.GetUserIDFromContext(c)
+	if err != nil {
+		return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: err.Error()})
+	}
+
+	courses, err := h.service.GetEnrolledCourses(c.Request().Context(), userID)
+	if err != nil {
+		c.Logger().Error("Handler.GetEnrolledCourses: ", err)
+		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to retrieve enrolled courses"})
+	}
+
+	// Return an empty list if the user is not enrolled in any courses, not an error.
+	if len(courses) == 0 {
+		return c.JSON(http.StatusOK, []models.EnrolledCourseResponse{})
+	}
+
+	return c.JSON(http.StatusOK, courses)
+}
+
 // --- User Notes Routes (within /profile group) ---
 func (h *Handler) GetUserNotes(c echo.Context) error {
 	userID, err := utils.GetUserIDFromContext(c)

@@ -36,6 +36,8 @@ type ServiceInterface interface {
 	UpdateUserProfile(ctx context.Context, userID string, data models.UserUpdateData) (*models.User, error)
 	HandleContactSubmission(ctx context.Context, data models.ContactFormData) error
 
+	GetEnrolledCourses(ctx context.Context, userID string) ([]models.EnrolledCourseResponse, error)
+
 	// User Notes
 	ListUserNotes(ctx context.Context, userID string, page, limit int) ([]models.UserNote, int, error)
 	GetUserNoteDetails(ctx context.Context, userID string, noteID int) (*models.UserNote, error)
@@ -500,6 +502,16 @@ func (s *Service) HandleContactSubmission(ctx context.Context, data models.Conta
 	log.Printf("SIMULATED: Email sent to %s, Subject: %s", s.adminEmail, emailSubject)
 
 	return nil // Simulate success
+}
+
+func (s *Service) GetEnrolledCourses(ctx context.Context, userID string) ([]models.EnrolledCourseResponse, error) {
+	courses, err := s.userRepo.FindEnrolledCoursesByUserID(ctx, userID)
+	if err != nil {
+		// No complex business logic here for now, just pass the result through.
+		// This layer exists to add such logic later if needed.
+		return nil, fmt.Errorf("service.GetEnrolledCourses: %w", err)
+	}
+	return courses, nil
 }
 
 // --- User Notes ---
