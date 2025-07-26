@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"jingdezhen-ceramics-backend/internal/models"
 	"log"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -23,6 +22,9 @@ type DBExecutor interface {
 }
 
 type RepositoryInterface interface {
+	BeginTx(ctx context.Context) (pgx.Tx, error)
+	WithTx(tx pgx.Tx) *Repository
+
 	FindAllCourses(ctx context.Context) ([]models.Course, error)
 	FindCourseByID(ctx context.Context, courseID int64) (*models.Course, error)
 	FindChaptersByCourseID(ctx context.Context, courseID int64) ([]models.CourseChapter, error)
@@ -36,8 +38,8 @@ type RepositoryInterface interface {
 	EnrollUserInCourse(ctx context.Context, userID string, courseID int64) error
 
 	UpdateLastVisitedAt(ctx context.Context, userID string, courseID int64) error
-	SaveContentBlockCompletion(ctx context.Context, userID string, blockID int64) (*models.ContentBlockCompletion, error)
-	SaveVideoProgress(ctx context.Context, userID string, blockID, lastStoppedAt int64) (*models.UserVideoProgress, error)
+	SavePassiveBlockCompletion(ctx context.Context, userID string, blockID int64) error
+	SaveVideoProgress(ctx context.Context, userID string, blockID, lastStoppedAt int64) error
 	SubmitAssignment(ctx context.Context, submission models.AssignmentSubmission) (*models.AssignmentSubmission, error)
 	SaveQuizAttempt(ctx context.Context, attempt models.QuizAttempt) (*models.QuizAttempt, error)
 
@@ -56,6 +58,14 @@ type Scannable interface {
 
 func NewRepository(db *pgxpool.Pool) RepositoryInterface {
 	return &Repository{db: db, executor: db}
+}
+
+func (r *Repository) BeginTx(ctx context.Context) (pgx.Tx, error) {
+	return r.db.Begin(ctx)
+}
+
+func (r *Repository) WithTx(tx pgx.Tx) *Repository {
+	return &Repository{db: r.db, executor: tx}
 }
 
 func (r *Repository) scanCourse(row Scannable) (*models.Course, error) {
@@ -117,8 +127,20 @@ func (r *Repository) FindCourseByID(ctx context.Context, courseID int64) (*model
 
 func (r *Repository) FindChaptersByCourseID(ctx context.Context, courseID int64) ([]models.CourseChapter, error) {
 	chapters := []models.CourseChapter{}
-	// Note: We don't select full content here for efficiency. Full content is fetched on demand.
-	query := `SELECT id, title, display_order, available_for_guests, content_block_count FROM course_chapters WHERE course_id = $1 ORDER BY display_order ASC`
+
+	query := `
+		SELECT 
+			cc.id, cc.title, cc.display_order, cc.available_for_guests,
+			COUNT(CASE WHEN ccb.type = 'video' THEN 1 END) as video_count,
+			COUNT(CASE WHEN ccb.type = 'reading' THEN 1 END) as reading_count,
+			COUNT(CASE WHEN ccb.type = 'quiz' THEN 1 END) as quiz_count,
+			COUNT(CASE WHEN ccb.type = 'assignment' THEN 1 END) as assignment_count
+		FROM course_chapters cc
+		LEFT JOIN chapter_content_blocks ccb ON cc.id = ccb.chapter_id
+		WHERE cc.course_id = $1
+		GROUP BY cc.id
+		ORDER BY cc.display_order ASC
+	`
 	rows, err := r.executor.Query(ctx, query, courseID)
 	if err != nil {
 		return nil, fmt.Errorf("repository.FindChaptersByCourseID.Query: %w", err)
@@ -127,11 +149,16 @@ func (r *Repository) FindChaptersByCourseID(ctx context.Context, courseID int64)
 
 	for rows.Next() {
 		var chapter models.CourseChapter
-		if err := rows.Scan(&chapter.ID, &chapter.Title, &chapter.DisplayOrder, &chapter.AvailableForGuests, &chapter.ContentBlockCount); err != nil {
+		if err := rows.Scan(
+			&chapter.ID, &chapter.Title, &chapter.DisplayOrder, &chapter.AvailableForGuests,
+			&chapter.ContentBlockCount.VideoCount, &chapter.ContentBlockCount.ReadingCount,
+			&chapter.ContentBlockCount.QuizCount, &chapter.ContentBlockCount.AssignmentCount,
+		); err != nil {
 			return nil, fmt.Errorf("repository.FindChaptersByCourseID.Scan: %w", err)
 		}
 		chapters = append(chapters, chapter)
 	}
+
 	return chapters, nil
 }
 
@@ -209,22 +236,60 @@ func (r *Repository) FindContentBlocksByChapterID(ctx context.Context, chapterID
 
 		blocks = append(blocks, block)
 	}
+
 	return blocks, nil
 }
 
 func (r *Repository) FindContentBlockByID(ctx context.Context, blockID int64) (*models.ChapterContentBlock, error) {
 	var block models.ChapterContentBlock
 
-	query := `SELECT id, chapter_id, type, content, display_order 
-	FROM course_chapter_content_blocks WHERE id = $1`
+	query := `
+		SELECT ccb.id, ccb.chapter_id, ccb.type, ccb.content, ccb.display_order, cc.course_id
+		FROM chapter_content_blocks ccb
+		JOIN course_chapters cc ON ccb.chapter_id = cc.id
+		WHERE ccb.id = $1
+	`
+	var contentJSON []byte
 	err := r.executor.QueryRow(ctx, query, blockID).Scan(
-		&block.ID, &block.ChapterID, &block.Type, &block.Content, &block.DisplayOrder,
+		&block.ID, &block.ChapterID, &block.Type, &contentJSON, &block.DisplayOrder, &block.CourseID,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, models.ErrNotFound
 		}
 		return nil, fmt.Errorf("repository.FindContentBlockByID: %w", err)
+	}
+
+	// Unmarshal logic
+	switch block.Type {
+	case "video":
+		var videoContent models.VideoContent
+		if err := json.Unmarshal(contentJSON, &videoContent); err != nil {
+			log.Printf("WARN: could not unmarshal video content for block %d: %v", block.ID, err)
+		} else {
+			block.Content = videoContent
+		}
+	case "reading":
+		var readingContent models.ReadingContent
+		if err := json.Unmarshal(contentJSON, &readingContent); err != nil {
+			log.Printf("WARN: could not unmarshal reading content for block %d: %v", block.ID, err)
+		} else {
+			block.Content = readingContent
+		}
+	case "assignment":
+		var asgnContent models.AssignmentContent
+		if err := json.Unmarshal(contentJSON, &asgnContent); err != nil {
+			log.Printf("WARN: could not unmarshal assignment content for block %d: %v", block.ID, err)
+		} else {
+			block.Content = asgnContent
+		}
+	case "quiz":
+		var quizContent models.QuizContent
+		if err := json.Unmarshal(contentJSON, &quizContent); err != nil {
+			log.Printf("WARN: could not unmarshal quiz content for block %d: %v", block.ID, err)
+		} else {
+			block.Content = quizContent
+		}
 	}
 
 	return &block, nil
@@ -321,52 +386,32 @@ func (r *Repository) UpdateLastVisitedAt(ctx context.Context, userID string, cou
 	return nil
 }
 
-func (r *Repository) SaveContentBlockCompletion(ctx context.Context, userID string, blockID int64) (*models.ContentBlockCompletion, error) {
-	block, err := r.FindContentBlockByID(ctx, blockID)
-	if err != nil {
-		return nil, fmt.Errorf("repository.SaveContentBlockCompletion.FindContentBlock: %w", err)
-	}
-
-	var completion models.ContentBlockCompletion
+func (r *Repository) SavePassiveBlockCompletion(ctx context.Context, userID string, blockID int64) error {
 	query := `
-		INSERT INTO content_block_completions (user_id, content_block_id, type, completed_at)
-		VALUES ($1, $2, $3, $4)
-		RETURNING id, user_id, content_block_id, type, completed_at
+		INSERT INTO user_content_block_progress (user_id, content_block_id)
+		VALUES ($1, $2)
+		ON CONFLICT (user_id, content_block_id) DO NOTHING
 	`
-	err = r.executor.QueryRow(ctx, query,
-		userID, blockID, block.Type, time.Now(),
-	).Scan(
-		&completion.ID,
-		&completion.UserID,
-		&completion.ContentBlockID,
-		&completion.Type,
-		&completion.CompletedAt,
-	)
+	_, err := r.executor.Exec(ctx, query, userID, blockID)
 	if err != nil {
-		return nil, fmt.Errorf("repository.SaveContentBlockCompletion: %w", err)
+		return fmt.Errorf("repository.SavePassiveBlockCompletion: %w", err)
 	}
-
-	return &completion, err
+	return nil
 }
 
-func (r *Repository) SaveVideoProgress(ctx context.Context, userID string, blockID, lastStoppedAt int64) (*models.UserVideoProgress, error) {
-	var progress models.UserVideoProgress
+func (r *Repository) SaveVideoProgress(ctx context.Context, userID string, blockID, lastStoppedAt int64) error {
 	query := `
 		INSERT INTO user_video_progress (user_id, content_block_id, last_stopped_at)
 		VALUES ($1, $2, $3)
-		RETURNING id, user_id, content_block_id, last_stopped_at
+		ON CONFLICT (user_id, content_block_id) DO UPDATE SET
+			last_stopped_at = EXCLUDED.last_stopped_at,
+			updated_at = NOW()
 	`
-	err := r.executor.QueryRow(ctx, query, userID, blockID, lastStoppedAt).Scan(
-		&progress.ID,
-		&progress.UserID,
-		&progress.ContentBlockID,
-		&progress.LastStoppedAt,
-	)
+	_, err := r.executor.Exec(ctx, query, userID, blockID, lastStoppedAt)
 	if err != nil {
-		return nil, fmt.Errorf("repository.SaveVideoProgress: %w", err)
+		return fmt.Errorf("repository.SaveVideoProgress: %w", err)
 	}
-
-	return &progress, nil
+	return nil
 }
 
 func (r *Repository) SubmitAssignment(ctx context.Context, submission models.AssignmentSubmission) (*models.AssignmentSubmission, error) {
@@ -453,5 +498,63 @@ func (r *Repository) GetUserProgressForChapters(ctx context.Context, userID stri
 }
 
 func (r *Repository) CalculateChapterProgress(ctx context.Context, userID string, chapterID int64) error {
-
+	// This query is complex. It calculates the number of completable blocks in a chapter
+	// and the number of blocks the user has completed, then updates the user_chapter_progress table.
+	query := `
+		WITH ChapterBlockCounts AS (
+			-- 1. Count total completable blocks in the chapter
+			SELECT COUNT(*) as total_blocks
+			FROM chapter_content_blocks
+			WHERE chapter_id = $2
+		),
+		UserCompletedCounts AS (
+			-- 2. Count completed blocks for the user in this chapter
+			SELECT COUNT(*) as completed_blocks
+			FROM (
+				-- Completed passive blocks (videos, readings)
+				SELECT ccb.id FROM user_content_block_progress ucbp
+				JOIN chapter_content_blocks ccb ON ucbp.content_block_id = ccb.id
+				WHERE ucbp.user_id = $1 AND ccb.chapter_id = $2
+				UNION
+				-- Completed quizzes
+				SELECT ccb.id FROM quiz_attempts qa
+				JOIN quizzes q ON qa.quiz_id = q.id
+				JOIN chapter_content_blocks ccb ON (ccb.content->>'quiz_id')::bigint = q.id
+				WHERE qa.user_id = $1 AND ccb.chapter_id = $2
+				UNION
+				-- Completed assignments
+				SELECT ccb.id FROM assignment_submissions asub
+				JOIN assignments a ON asub.assignment_id = a.id
+				JOIN chapter_content_blocks ccb ON (ccb.content->>'assignment_id')::bigint = a.id
+				WHERE asub.user_id = $1 AND ccb.chapter_id = $2
+			) as completed
+		),
+		NewProgress AS (
+			-- 3. Calculate the new percentage
+			SELECT
+				CASE
+					WHEN cbc.total_blocks > 0 THEN (ucc.completed_blocks::decimal / cbc.total_blocks * 100)::integer
+					ELSE 0
+				END as new_percentage,
+				CASE
+					WHEN ucc.completed_blocks = cbc.total_blocks AND cbc.total_blocks > 0 THEN NOW()
+					ELSE NULL
+				END as completed_at_time
+			FROM ChapterBlockCounts cbc, UserCompletedCounts ucc
+		)
+		-- 4. Update the user_chapter_progress table with the new percentage
+		INSERT INTO user_chapter_progress (user_id, chapter_id, progress_percentage, completed_at)
+		SELECT $1, $2, np.new_percentage, np.completed_at_time
+		FROM NewProgress np
+		ON CONFLICT (user_id, chapter_id) DO UPDATE SET
+			progress_percentage = EXCLUDED.progress_percentage,
+			-- Only set completed_at if it's not already set, to preserve the original completion time
+			completed_at = COALESCE(user_chapter_progress.completed_at, EXCLUDED.completed_at),
+			updated_at = NOW();
+	`
+	_, err := r.executor.Exec(ctx, query, userID, chapterID)
+	if err != nil {
+		return fmt.Errorf("repository.CalculateChapterProgress: %w", err)
+	}
+	return nil
 }

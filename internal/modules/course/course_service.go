@@ -147,7 +147,7 @@ func (s *Service) MarkContentBlockComplete(ctx context.Context, userID string, c
 	if err != nil {
 		return err
 	}
-	if block.ChapterID != chapterID {
+	if block.ChapterID != chapterID || block.CourseID != courseID {
 		return models.ErrForbidden
 	}
 
@@ -156,18 +156,19 @@ func (s *Service) MarkContentBlockComplete(ctx context.Context, userID string, c
 	}
 
 	// 3. Call the repository to save the completion record.
-	_, err = s.repo.SaveContentBlockCompletion(ctx, userID, blockID)
+	err = s.repo.SavePassiveBlockCompletion(ctx, userID, blockID)
 	if err != nil {
 		return fmt.Errorf("service.MarkContentBlockComplete.SaveCompletion: %w", err)
 	}
 
 	// 4. After a block is completed, recalculate the overall chapter progress percentage.
 	// This is a crucial step to keep the data in sync.
-	err = s.repo.CalculateChapterProgress(ctx, userID, chapterID)
-	if err != nil {
-		// Log the error, but don't fail the whole request, as the main action succeeded.
-		log.Printf("WARN: Failed to recalculate chapter progress for user %s, chapter %d: %v", userID, chapterID, err)
-	}
+	go func() {
+		bgCtx := context.Background()
+		if err := s.repo.CalculateChapterProgress(bgCtx, userID, chapterID); err != nil {
+			log.Printf("ERROR: Failed to recalculate chapter progress for user %s, chapter %d: %v", userID, chapterID, err)
+		}
+	}()
 
 	return nil
 }
@@ -193,7 +194,7 @@ func (s *Service) UpdateVideoProgress(ctx context.Context, userID string, blockI
 	}
 
 	// Call the repository to save the video progress.
-	_, err = s.repo.SaveVideoProgress(ctx, userID, blockID, data.LastStoppedAt)
+	err = s.repo.SaveVideoProgress(ctx, userID, blockID, data.LastStoppedAt)
 	if err != nil {
 		return fmt.Errorf("service.UpdateVideoProgress.SaveProgress: %w", err)
 	}
@@ -202,12 +203,14 @@ func (s *Service) UpdateVideoProgress(ctx context.Context, userID string, blockI
 	if videoContent, ok := block.Content.(models.VideoContent); ok {
 		// Add a small buffer (e.g., 5 seconds) to account for player inaccuracies.
 		if videoContent.Duration > 0 && data.LastStoppedAt >= videoContent.Duration-5 {
-			fmt.Printf("INFO: Video block %d completed for user %s. Auto-marking as complete.\n", blockID, userID)
+			log.Printf("INFO: Video block %d completed for user %s. Auto-marking as complete.\n", blockID, userID)
 			// Call the MarkContentBlockComplete logic.
-			if err := s.MarkContentBlockComplete(ctx, userID, block.CourseID, block.ChapterID, blockID); err != nil {
-				// Log this error, but don't fail the main request, as the progress was saved.
-				log.Printf("WARN: Failed to auto-mark video as complete after finishing: %v", err)
-			}
+			go func() {
+				bgCtx := context.Background()
+				if err := s.MarkContentBlockComplete(bgCtx, userID, block.CourseID, block.ChapterID, blockID); err != nil {
+					log.Printf("WARN: Failed to auto-mark video as complete after finishing: %v", err)
+				}
+			}()
 		}
 	}
 
@@ -261,7 +264,20 @@ func (s *Service) SubmitAssignment(ctx context.Context, userID string, chapterID
 		Status:       "ungraded",
 		SubmittedAt:  time.Now(),
 	}
-	return s.repo.SubmitAssignment(ctx, submission)
+	result, err := s.repo.SubmitAssignment(ctx, submission)
+	if err != nil {
+		return nil, err
+	}
+
+	// 4. After submission, trigger progress recalculation
+	go func() {
+		bgCtx := context.Background()
+		if err := s.repo.CalculateChapterProgress(bgCtx, userID, chapterID); err != nil {
+			log.Printf("ERROR: Failed to recalculate chapter progress after assignment submission for user %s, chapter %d: %v", userID, chapterID, err)
+		}
+	}()
+
+	return result, nil
 }
 
 func (s *Service) SubmitQuiz(ctx context.Context, userID string, chapterID int64, quizID int64, data models.SubmitQuizRequest) (any, error) {
@@ -399,7 +415,15 @@ func (s *Service) SubmitQuiz(ctx context.Context, userID string, chapterID int64
 		return nil, fmt.Errorf("failed to save quiz attempt: %w", err)
 	}
 
-	// 5. Return the results (e.g., score, correct answers).
+	// 5. After saving the attempt, trigger progress recalculation
+	go func() {
+		bgCtx := context.Background()
+		if err := s.repo.CalculateChapterProgress(bgCtx, userID, chapterID); err != nil {
+			log.Printf("ERROR: Failed to recalculate chapter progress after quiz submission for user %s, chapter %d: %v", userID, chapterID, err)
+		}
+	}()
+
+	// 6. Return the results (e.g., score, correct answers).
 	feedback := "Great job!"
 	if score < totalPoints {
 		feedback = "Good effort! Review the chapter content to improve your score."

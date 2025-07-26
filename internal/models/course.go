@@ -98,21 +98,13 @@ type UserChapterProgress struct {
 	UpdatedAt          time.Time  `json:"updated_at" db:"updated_at"`
 }
 
-type ContentBlockCompletion struct {
-	ID             int64     `json:"id" db:"id"`
-	UserID         string    `json:"user_id" db:"user_id"`
-	Type           string    `json:"type" db:"type"`
-	ContentBlockID int64     `json:"content_block_id" db:"content_block_id"`
-	CompletedAt    time.Time `json:"completed_at" db:"completed_at"`
-}
-
 // UserVideoProgress tracks a user's specific progress within a single video content block.
 // LastStoppedAt(store): represents the row in user_video_progress database table.
 type UserVideoProgress struct {
-	ID             int64  `json:"id" db:"id"`
-	UserID         string `json:"user_id" db:"user_id"`
-	ContentBlockID int64  `json:"content_block_id" db:"content_block_id"`
-	LastStoppedAt  int64  `json:"last_stopped_at" db:"last_stopped_at"` // in seconds
+	UserID         string    `json:"user_id" db:"user_id"`
+	ContentBlockID int64     `json:"content_block_id" db:"content_block_id"`
+	LastStoppedAt  int64     `json:"last_stopped_at" db:"last_stopped_at"` // in seconds
+	UpdatedAt      time.Time `json:"updated_at" db:"updated_at"`
 }
 
 // UpdateVideoProgressRequest defines the request body for updating video progress.
