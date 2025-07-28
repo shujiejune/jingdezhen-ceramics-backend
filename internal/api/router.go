@@ -140,6 +140,7 @@ func SetupRoutes(
 			authForumGroup.PUT("/posts/:post_id", forumHandler.UpdatePost)    // Check ownership
 			authForumGroup.DELETE("/posts/:post_id", forumHandler.DeletePost) // Check ownership or admin
 			authForumGroup.POST("/posts/:post_id/comments", forumHandler.CreateComment)
+			authForumGroup.POST("/posts/:post_id/comments/:comment_id/replies", forumHandler.CreateReply)
 			authForumGroup.PUT("/comments/:comment_id", forumHandler.UpdateComment)
 			authForumGroup.DELETE("/comments/:comment_id", forumHandler.DeleteComment)
 			authForumGroup.POST("/posts/:post_id/like", forumHandler.LikePost)
