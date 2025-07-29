@@ -315,7 +315,7 @@ func (h *Handler) DeleteComment(c echo.Context) error {
 }
 
 // LikePost handles toggling a like on a post.
-func (h *Handler) LikePost(c echo.Context) error {
+func (h *Handler) TogglePostLike(c echo.Context) error {
 	userID, err := utils.GetUserIDFromContext(c)
 	if err != nil {
 		return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: err.Error()})
@@ -336,7 +336,7 @@ func (h *Handler) LikePost(c echo.Context) error {
 }
 
 // SavePost handles toggling a save/bookmark on a post.
-func (h *Handler) SavePost(c echo.Context) error {
+func (h *Handler) TogglePostSave(c echo.Context) error {
 	userID, err := utils.GetUserIDFromContext(c)
 	if err != nil {
 		return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: err.Error()})
@@ -355,7 +355,7 @@ func (h *Handler) SavePost(c echo.Context) error {
 }
 
 // LikeComment handles toggling a like on a comment.
-func (h *Handler) LikeComment(c echo.Context) error {
+func (h *Handler) ToggleCommentLike(c echo.Context) error {
 	userID, err := utils.GetUserIDFromContext(c)
 	if err != nil {
 		return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: err.Error()})

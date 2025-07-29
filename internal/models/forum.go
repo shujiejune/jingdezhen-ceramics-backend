@@ -84,3 +84,9 @@ type UpdatePostRequest struct {
 type CreateCommentRequest struct {
 	Content string `json:"content" validate:"required,min=1"`
 }
+
+// ToggleResult is a generic response for like/save actions.
+type ToggleResult struct {
+	IsActive bool `json:"is_active"`
+	NewCount int  `json:"new_count"`
+}
