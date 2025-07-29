@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"jingdezhen-ceramics-backend/internal/models"
+	"log"
 )
 
 type ServiceInterface interface {
@@ -18,9 +19,9 @@ type ServiceInterface interface {
 	CreateComment(ctx context.Context, userID string, postID int64, parentCommentID *int64, content string) (*models.ForumComment, error)
 	UpdateComment(ctx context.Context, userID string, commentID int64, content string) (*models.ForumComment, error)
 	DeleteComment(ctx context.Context, userID, userRole string, commentID int64) error
-	TogglePostLike(ctx context.Context, userID string, postID int64) error
-	TogglePostSave(ctx context.Context, userID string, postID int64, save bool) error
-	ToggleCommentLike(ctx context.Context, userID string, commentID int64, like bool) error
+	TogglePostLike(ctx context.Context, userID string, postID int64) (*models.ToggleResult, error)
+	TogglePostSave(ctx context.Context, userID string, postID int64) (*models.ToggleResult, error)
+	ToggleCommentLike(ctx context.Context, userID string, commentID int64) (*models.ToggleResult, error)
 }
 
 type Service struct {
