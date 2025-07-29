@@ -143,9 +143,9 @@ func SetupRoutes(
 			authForumGroup.POST("/posts/:post_id/comments/:comment_id/replies", forumHandler.CreateReply)
 			authForumGroup.PUT("/comments/:comment_id", forumHandler.UpdateComment)
 			authForumGroup.DELETE("/comments/:comment_id", forumHandler.DeleteComment)
-			authForumGroup.POST("/posts/:post_id/like", forumHandler.LikePost)
-			authForumGroup.POST("/posts/:post_id/save", forumHandler.SavePost)
-			authForumGroup.POST("/comments/:comment_id/like", forumHandler.LikeComment)
+			authForumGroup.POST("/posts/:post_id/like", forumHandler.TogglePostLike)
+			authForumGroup.POST("/posts/:post_id/save", forumHandler.TogglePostSave)
+			authForumGroup.POST("/comments/:comment_id/like", forumHandler.ToggleCommentLike)
 		}
 	}
 
