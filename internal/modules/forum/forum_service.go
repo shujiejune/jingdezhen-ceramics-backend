@@ -13,12 +13,14 @@ type ServiceInterface interface {
 	SearchPosts(ctx context.Context, userID, query string, page, limit int) ([]models.ForumPost, int, error)
 	GetCategories(ctx context.Context) ([]models.ForumCategory, error)
 	GetTags(ctx context.Context) ([]models.Tag, error)
+
 	CreatePost(ctx context.Context, userID string, data models.CreatePostRequest) (*models.ForumPost, error)
 	UpdatePost(ctx context.Context, userID string, postID int64, data models.UpdatePostRequest) (*models.ForumPost, error)
 	DeletePost(ctx context.Context, userID, userRole string, postID int64) error
 	CreateComment(ctx context.Context, userID string, postID int64, parentCommentID *int64, content string) (*models.ForumComment, error)
 	UpdateComment(ctx context.Context, userID string, commentID int64, content string) (*models.ForumComment, error)
 	DeleteComment(ctx context.Context, userID, userRole string, commentID int64) error
+
 	TogglePostLike(ctx context.Context, userID string, postID int64) (*models.ToggleResult, error)
 	TogglePostSave(ctx context.Context, userID string, postID int64) (*models.ToggleResult, error)
 	ToggleCommentLike(ctx context.Context, userID string, commentID int64) (*models.ToggleResult, error)
@@ -222,8 +224,20 @@ func (s *Service) CreateComment(ctx context.Context, userID string, postID int64
 		}
 	}
 
-	// For simplicity, let DB foreign key constraints handle this.
-	return s.repo.CreateComment(ctx, userID, postID, parentCommentID, content)
+	// 3. Save the comment to the database
+	savedComment, err := s.repo.CreateComment(ctx, userID, postID, parentCommentID, content)
+	if err != nil {
+		return nil, err
+	}
+
+	// 4. After success, send notification to the original author
+	go func() {
+		// Use context.Background() for background tasks
+		s.notificationSvc.SendNewCommentNotification(context.Background(), savedComment)
+		log.Printf("INFO: Triggered notification for new comment %d", savedComment.ID)
+	}()
+
+	return savedComment, nil
 }
 
 // UpdateComment handles business logic for updating a comment, including authorization.
