@@ -296,7 +296,7 @@ func (s *Service) TogglePostSave(ctx context.Context, userID string, postID int6
 	if isSaved {
 		err = s.repo.RemoveSaveFromPost(ctx, userID, postID)
 	} else {
-		err = s.repo.AddSaveForPost(ctx, userID, postID)
+		err = s.repo.AddSaveToPost(ctx, userID, postID)
 	}
 	if err != nil {
 		return nil, err

@@ -2,6 +2,7 @@ package forum
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"jingdezhen-ceramics-backend/internal/models"
@@ -46,7 +47,7 @@ type RepositoryInterface interface {
 	IsCommentLikedByUser(ctx context.Context, userID string, commentID int64) (bool, error)
 	AddLikeToPost(ctx context.Context, userID string, postID int64) (int, error)
 	RemoveLikeFromPost(ctx context.Context, userID string, postID int64) (int, error)
-	AddSaveForPost(ctx context.Context, userID string, postID int64) error
+	AddSaveToPost(ctx context.Context, userID string, postID int64) error
 	RemoveSaveFromPost(ctx context.Context, userID string, postID int64) error
 	AddLikeToComment(ctx context.Context, userID string, commentID int64) (int, error)
 	RemoveLikeFromComment(ctx context.Context, userID string, commentID int64) (int, error)
@@ -58,6 +59,10 @@ type RepositoryInterface interface {
 type Repository struct {
 	db       *pgxpool.Pool
 	executor DBExecutor
+}
+
+type Scannable interface {
+	Scan(dest ...any) error
 }
 
 func NewRepository(db *pgxpool.Pool) RepositoryInterface {
@@ -72,9 +77,41 @@ func (r *Repository) WithTx(tx pgx.Tx) *Repository {
 	return &Repository{db: r.db, executor: tx}
 }
 
+func (r *Repository) scanForumPostWithoutContent(row Scannable) (*models.ForumPost, error) {
+	var post models.ForumPost
+	var avatarUrl sql.NullString
+
+	err := row.Scan(
+		&post.ID,
+		&post.UserID,
+		&post.AuthorNickname,
+		&avatarUrl,
+		&post.CategoryID,
+		&post.CategoryName,
+		&post.Title,
+		&post.IsPinned,
+		&post.ViewCount,
+		&post.LikeCount,
+		&post.CommentCount,
+		&post.LastActivityAt,
+		&post.CreatedAt,
+		&post.UpdatedAt,
+		&post.Tags,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if avatarUrl.Valid {
+		post.AuthorAvatarURL = &avatarUrl.String
+	} else {
+		post.AuthorAvatarURL = nil
+	}
+	return &post, nil
+}
+
 // FindAllPosts retrieves all the forum posts with filters and pagination
 func (r *Repository) FindAllPosts(ctx context.Context, filters models.PostFilters) ([]models.ForumPost, int, error) {
-	var args []interface{}
+	var args []any
 	argIdx := 1
 
 	baseQuery := `
@@ -112,6 +149,10 @@ func (r *Repository) FindAllPosts(ctx context.Context, filters models.PostFilter
 	if filters.Sort == "hottest" {
 		// A simple "hottest" algorithm: likes + comments, weighted by time decay.
 		orderByClause = "ORDER BY fp.is_pinned DESC, (fp.like_count + fp.comment_count) / POW(EXTRACT(EPOCH FROM (NOW() - fp.created_at))/3600, 1.8) DESC"
+	} else if filters.Sort == "most recently published" {
+		orderByClause = "ORDER BY fp.is_pinned DESC, fp.created_at DESC"
+	} else if filters.Sort == "most recently updated" {
+		orderByClause = "ORDER BY fp.is_pinned DESC, fp.updated_at DESC"
 	}
 
 	selectQuery := `
@@ -132,16 +173,11 @@ func (r *Repository) FindAllPosts(ctx context.Context, filters models.PostFilter
 
 	posts := []models.ForumPost{}
 	for rows.Next() {
-		var post models.ForumPost
-		if err := rows.Scan(
-			&post.ID, &post.UserID, &post.AuthorNickname, &post.AuthorAvatarURL,
-			&post.CategoryID, &post.CategoryName, &post.Title, &post.IsPinned,
-			&post.ViewCount, &post.CommentCount, &post.LikeCount,
-			&post.LastActivityAt, &post.CreatedAt, &post.UpdatedAt,
-		); err != nil {
+		post, err := r.scanForumPostWithoutContent(rows)
+		if err != nil {
 			return nil, 0, fmt.Errorf("repository.FindAllPosts.Scan: %w", err)
 		}
-		posts = append(posts, post)
+		posts = append(posts, *post)
 	}
 	return posts, total, nil
 }
@@ -213,16 +249,11 @@ func (r *Repository) SearchPosts(ctx context.Context, query string, page, limit 
 
 	posts := []models.ForumPost{}
 	for rows.Next() {
-		var post models.ForumPost
-		if err := rows.Scan(
-			&post.ID, &post.UserID, &post.AuthorNickname, &post.AuthorAvatarURL,
-			&post.CategoryID, &post.CategoryName, &post.Title, &post.IsPinned,
-			&post.ViewCount, &post.CommentCount, &post.LikeCount,
-			&post.LastActivityAt, &post.CreatedAt, &post.UpdatedAt,
-		); err != nil {
+		post, err := r.scanForumPostWithoutContent(rows)
+		if err != nil {
 			return nil, 0, fmt.Errorf("repository.SearchPosts.Scan: %w", err)
 		}
-		posts = append(posts, post)
+		posts = append(posts, *post)
 	}
 	return posts, total, nil
 }
@@ -246,20 +277,20 @@ func (r *Repository) FindAllCategories(ctx context.Context) ([]models.ForumCateg
 }
 
 func (r *Repository) FindCategoryByID(ctx context.Context, categoryID int64) (*models.ForumCategory, error) {
-	category := models.ForumCategory{}
+	cat := models.ForumCategory{}
 	query := `
 		SELECT id, name, description, display_order
 		FROM forum_categories
 		WHERE id = $1
 	`
 	err := r.executor.QueryRow(ctx, query, categoryID).Scan(
-		&category.ID, &category.Name, &category.Description, &category.DisplayOrder,
+		&cat.ID, &cat.Name, &cat.Description, &cat.DisplayOrder,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("repository.FindCategoryByID: %w", err)
 	}
 
-	return &category, nil
+	return &cat, nil
 }
 
 func (r *Repository) FindAllTags(ctx context.Context) ([]models.Tag, error) {
@@ -287,14 +318,50 @@ func (r *Repository) FindAllTags(ctx context.Context) ([]models.Tag, error) {
 	return tags, nil
 }
 
+func (r *Repository) scanComment(row Scannable) (*models.ForumComment, error) {
+	var cmt models.ForumComment
+	var avatarUrl sql.NullString
+	var parentID sql.NullInt64
+
+	err := row.Scan(
+		&cmt.ID,
+		&cmt.PostID,
+		&cmt.UserID,
+		&cmt.AuthorNickname,
+		&avatarUrl,
+		&parentID,
+		&cmt.Content,
+		&cmt.LikeCount,
+		&cmt.CreatedAt,
+		&cmt.UpdatedAt,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if avatarUrl.Valid {
+		cmt.AuthorAvatarURL = &avatarUrl.String
+	} else {
+		cmt.AuthorAvatarURL = nil
+	}
+	if parentID.Valid {
+		cmt.ParentCommentID = &parentID.Int64
+	} else {
+		cmt.ParentCommentID = nil
+	}
+	return &cmt, nil
+}
+
 func (r *Repository) FindCommentByID(ctx context.Context, commentID int64) (*models.ForumComment, error) {
 	var comment models.ForumComment
 	query := `
-		SELECT id, post_id
-		FROM forum_comments
+		SELECT id, post_id, user_id, u.nickname as author_nickname, u.avatar_url as author_avatar_url,
+		parent_comment_id, content, created_at, updated_at, 
+		FROM forum_comments fc
+		JOIN users u ON fc.user_id = u.id
+		LEFT JOIN forum_comment_likes fcl ON fc.user_id = fcl.user_id
 		WHERE id = $1
 	`
-	err := r.executor.QueryRow(ctx, query, commentID).Scan(&comment.ID, &comment.PostID)
+	err := r.executor.QueryRow(ctx, query, commentID).Scan(&comment.ID, &comment.PostID, &comment)
 	if err != nil {
 		return nil, fmt.Errorf("repository.FindCommentByID: %w", err)
 	}
