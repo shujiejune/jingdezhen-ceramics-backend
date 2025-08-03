@@ -8,7 +8,6 @@ type ForumCategory struct {
 	Name         string `json:"name" db:"name"`
 	Description  string `json:"description,omitempty" db:"description"`
 	DisplayOrder int    `json:"desplay_order" db:"display_order"`
-	PostCount    int    `json:"post_count" db:"post_count"`
 }
 
 // Tag represents a tag that can be applied to posts.

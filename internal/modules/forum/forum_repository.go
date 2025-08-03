@@ -352,7 +352,6 @@ func (r *Repository) scanComment(row Scannable) (*models.ForumComment, error) {
 }
 
 func (r *Repository) FindCommentByID(ctx context.Context, commentID int64) (*models.ForumComment, error) {
-	var comment models.ForumComment
 	query := `
 		SELECT id, post_id, user_id, u.nickname as author_nickname, u.avatar_url as author_avatar_url,
 		parent_comment_id, content, created_at, updated_at, 
@@ -361,11 +360,12 @@ func (r *Repository) FindCommentByID(ctx context.Context, commentID int64) (*mod
 		LEFT JOIN forum_comment_likes fcl ON fc.user_id = fcl.user_id
 		WHERE id = $1
 	`
-	err := r.executor.QueryRow(ctx, query, commentID).Scan(&comment.ID, &comment.PostID, &comment)
+	row := r.executor.QueryRow(ctx, query, commentID)
+	comment, err := r.scanComment(row)
 	if err != nil {
-		return nil, fmt.Errorf("repository.FindCommentByID: %w", err)
+		return nil, fmt.Errorf("repository.FindCommentByID.Scan: %w", err)
 	}
-	return &comment, nil
+	return comment, nil
 }
 
 // FindCommentsByPostID retrieves all comments for a post, ordered for threading.
@@ -403,21 +403,46 @@ func (r *Repository) FindCommentsByPostID(ctx context.Context, postID int64) ([]
 	defer rows.Close()
 
 	for rows.Next() {
-		var c models.ForumComment
-		if err := rows.Scan(
-			&c.ID, &c.PostID, &c.UserID, &c.AuthorNickname, &c.AuthorAvatarURL,
-			&c.ParentCommentID, &c.Content, &c.LikeCount, &c.CreatedAt, &c.UpdatedAt,
-		); err != nil {
+		c, err := r.scanComment(rows)
+		if err != nil {
 			return nil, fmt.Errorf("repository.FindCommentsByPostID.Scan: %w", err)
 		}
-		comments = append(comments, c)
+		comments = append(comments, *c)
 	}
 	return comments, nil
 }
 
-func (r *Repository) CheckPostOwnership(ctx context.Context, postID int64, userID string) (bool, error)
+func (r *Repository) CheckPostOwnership(ctx context.Context, postID int64, userID string) (bool, error) {
+	var postUserID string
 
-func (r *Repository) CheckCommentOwnership(ctx context.Context, commentID int64, userID string) (bool, error)
+	query := `SELECT user_id FROM forum_posts WHERE id = $1`
+	err := r.executor.QueryRow(ctx, query, postID).Scan(&postUserID)
+	if err != nil {
+		return false, fmt.Errorf("repository.CheckPostOwnership.Query: %w", err)
+	}
+
+	if postUserID == userID {
+		return true, nil
+	} else {
+		return false, models.ErrNotOwned
+	}
+}
+
+func (r *Repository) CheckCommentOwnership(ctx context.Context, commentID int64, userID string) (bool, error) {
+	var cmtUserID string
+
+	query := `SELECT user_id FROM forum_comments WHERE id = $1`
+	err := r.executor.QueryRow(ctx, query, commentID).Scan(&cmtUserID)
+	if err != nil {
+		return false, fmt.Errorf("repository.CheckCommentOwnership.Query: %w", err)
+	}
+
+	if cmtUserID == userID {
+		return true, nil
+	} else {
+		return false, models.ErrNotOwned
+	}
+}
 
 func (r *Repository) CreatePost(ctx context.Context, userID string, data models.CreatePostRequest) (*models.ForumPost, error) {
 	tx, err := r.db.Begin(ctx)
