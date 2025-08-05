@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"jingdezhen-ceramics-backend/internal/models"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -493,7 +494,79 @@ func (r *Repository) CreatePost(ctx context.Context, userID string, data models.
 	return r.FindPostByID(ctx, postID)
 }
 
-func (r *Repository) UpdatePost(ctx context.Context, postID int64, data models.UpdatePostRequest) (*models.ForumPost, error)
+func (r *Repository) UpdatePost(ctx context.Context, postID int64, data models.UpdatePostRequest) (*models.ForumPost, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	repoWithTx := r.WithTx(tx)
+
+	// Build dynamic query
+	var setClauses []string
+	var args []any
+	argIdx := 1
+	if data.Title != nil {
+		setClauses = append(setClauses, fmt.Sprintf("title = $%d", argIdx))
+		args = append(args, *data.Title)
+		argIdx++
+	}
+	if data.Content != nil {
+		setClauses = append(setClauses, fmt.Sprintf("content = $%d", argIdx))
+		args = append(args, *data.Content)
+		argIdx++
+	}
+	if data.CategoryID != nil {
+		setClauses = append(setClauses, fmt.Sprintf("category_id = $%d", argIdx))
+		args = append(args, *data.CategoryID)
+		argIdx++
+	}
+
+	if len(setClauses) > 0 {
+		setClauses = append(setClauses, "updated_at = NOW()")
+		args = append(args, postID)
+		query := fmt.Sprintf("UPDATE forum_posts SET %s WHERE id = $%d", strings.Join(setClauses, ", "), argIdx)
+		if _, err := repoWithTx.executor.Exec(ctx, query, args...); err != nil {
+			return nil, fmt.Errorf("repository.UpdatePost.Exec: %w", err)
+		}
+	}
+
+	// Handle tags (delete old, add new)
+	if data.Tags != nil {
+		if _, err := repoWithTx.executor.Exec(ctx, "DELETE FROM forum_post_tags WHERE post_id = $1", postID); err != nil {
+			return nil, fmt.Errorf("repository.UpdatePost.DeleteTags: %w", err)
+		}
+		// (Re-use the find/create/link logic from CreatePost here)
+		if len(data.Tags) > 0 {
+			tagIDs := []int64{}
+			for _, tagName := range data.Tags {
+				var tagID int64
+				// Try to find the tag first
+				err := repoWithTx.executor.QueryRow(ctx, "SELECT id FROM tags WHERE name = $1", tagName).Scan(&tagID)
+				if errors.Is(err, pgx.ErrNoRows) {
+					// If not found, create it
+					err = repoWithTx.executor.QueryRow(ctx, "INSERT INTO tags (name) VALUES ($1) RETURNING id", tagName).Scan(&tagID)
+				}
+				if err != nil {
+					return nil, fmt.Errorf("repository.CreatePost.FindOrCreateTag: %w", err)
+				}
+				tagIDs = append(tagIDs, tagID)
+			}
+			// Link tags to the post
+			for _, tagID := range tagIDs {
+				_, err := repoWithTx.executor.Exec(ctx, "INSERT INTO forum_post_tags (post_id, tag_id) VALUES ($1, $2)", postID, tagID)
+				if err != nil {
+					return nil, fmt.Errorf("repository.CreatePost.LinkTag: %w", err)
+				}
+			}
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return r.FindPostByID(ctx, postID)
+}
 
 func (r *Repository) DeletePost(ctx context.Context, postID int64) error {
 	// The CASCADE DELETE on foreign keys will handle deleting related likes, comments, etc.
@@ -544,7 +617,21 @@ func (r *Repository) CreateComment(ctx context.Context, userID string, postID in
 	return r.FindCommentByID(ctx, commentID)
 }
 
-func (r *Repository) UpdateComment(ctx context.Context, commentID int64, content string) (*models.ForumComment, error)
+func (r *Repository) UpdateComment(ctx context.Context, commentID int64, content string) (*models.ForumComment, error) {
+	query := `
+		UPDATE forum_comments SET content = $1, updated_at = NOW() 
+		WHERE id = $2
+	`
+	cmdTag, err := r.executor.Exec(ctx, query, content, commentID)
+	if err != nil {
+		return nil, fmt.Errorf("repository.UpdateComment.Exec: %w", err)
+	}
+	if cmdTag.RowsAffected() == 0 {
+		return nil, models.ErrNotFound // No comment was updated, likely wrong ID
+	}
+
+	return r.FindCommentByID(ctx, commentID)
+}
 
 func (r *Repository) DeleteComment(ctx context.Context, commentID int64) error {
 	// The CASCADE DELETE on foreign keys will handle deleting related likes, comments, etc.
