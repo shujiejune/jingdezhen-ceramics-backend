@@ -353,17 +353,19 @@ func (r *Repository) scanComment(row Scannable) (*models.ForumComment, error) {
 
 func (r *Repository) FindCommentByID(ctx context.Context, commentID int64) (*models.ForumComment, error) {
 	query := `
-		SELECT id, post_id, user_id, u.nickname as author_nickname, u.avatar_url as author_avatar_url,
-		parent_comment_id, content, created_at, updated_at, 
+		SELECT fc.id, fc.post_id, fc.user_id, u.nickname as author_nickname, u.avatar_url as author_avatar_url,
+		fc.parent_comment_id, fc.content, fc.like_count, fc.created_at, fc.updated_at, 
 		FROM forum_comments fc
 		JOIN users u ON fc.user_id = u.id
-		LEFT JOIN forum_comment_likes fcl ON fc.user_id = fcl.user_id
-		WHERE id = $1
+		WHERE fc.id = $1
 	`
 	row := r.executor.QueryRow(ctx, query, commentID)
 	comment, err := r.scanComment(row)
 	if err != nil {
-		return nil, fmt.Errorf("repository.FindCommentByID.Scan: %w", err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, models.ErrNotFound
+		}
+		return nil, fmt.Errorf("repository.FindCommentByID: %w", err)
 	}
 	return comment, nil
 }
@@ -405,7 +407,10 @@ func (r *Repository) FindCommentsByPostID(ctx context.Context, postID int64) ([]
 	for rows.Next() {
 		c, err := r.scanComment(rows)
 		if err != nil {
-			return nil, fmt.Errorf("repository.FindCommentsByPostID.Scan: %w", err)
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, models.ErrNotFound
+			}
+			return nil, fmt.Errorf("repository.FindCommentsByPostID: %w", err)
 		}
 		comments = append(comments, *c)
 	}
@@ -451,6 +456,8 @@ func (r *Repository) CreatePost(ctx context.Context, userID string, data models.
 	}
 	defer tx.Rollback(ctx)
 
+	repoWithTx := r.WithTx(tx)
+
 	// 1. Insert the main post
 	postQuery := `
 		INSERT INTO forum_posts (user_id, category_id, title, content)
@@ -459,15 +466,34 @@ func (r *Repository) CreatePost(ctx context.Context, userID string, data models.
 	`
 	var postID int64
 	var createdAt, updatedAt, lastActivityAt time.Time
-	err = tx.QueryRow(ctx, postQuery, userID, data.CategoryID, data.Title, data.Content).Scan(&postID, &createdAt, &updatedAt, &lastActivityAt)
+	err = repoWithTx.executor.QueryRow(ctx, postQuery, userID, data.CategoryID, data.Title, data.Content).Scan(&postID, &createdAt, &updatedAt, &lastActivityAt)
 	if err != nil {
 		return nil, fmt.Errorf("repository.CreatePost.InsertPost: %w", err)
 	}
 
 	// 2. Handle tags
 	if len(data.Tags) > 0 {
-		// This is a complex operation: find existing tags, create new ones, then link them.
-		// For brevity, a full implementation is omitted, but it would involve more queries within the transaction.
+		tagIDs := []int64{}
+		for _, tagName := range data.Tags {
+			var tagID int64
+			// Try to find the tag first
+			err := repoWithTx.executor.QueryRow(ctx, "SELECT id FROM tags WHERE name = $1", tagName).Scan(&tagID)
+			if errors.Is(err, pgx.ErrNoRows) {
+				// If not found, create it
+				err = repoWithTx.executor.QueryRow(ctx, "INSERT INTO tags (name) VALUES ($1) RETURNING id", tagName).Scan(&tagID)
+			}
+			if err != nil {
+				return nil, fmt.Errorf("repository.CreatePost.FindOrCreateTag: %w", err)
+			}
+			tagIDs = append(tagIDs, tagID)
+		}
+		// Link tags to the post
+		for _, tagID := range tagIDs {
+			_, err := repoWithTx.executor.Exec(ctx, "INSERT INTO forum_post_tags (post_id, tag_id) VALUES ($1, $2)", postID, tagID)
+			if err != nil {
+				return nil, fmt.Errorf("repository.CreatePost.LinkTag: %w", err)
+			}
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -480,7 +506,17 @@ func (r *Repository) CreatePost(ctx context.Context, userID string, data models.
 
 func (r *Repository) UpdatePost(ctx context.Context, postID int64, data models.UpdatePostRequest) (*models.ForumPost, error)
 
-func (r *Repository) DeletePost(ctx context.Context, postID int64) error
+func (r *Repository) DeletePost(ctx context.Context, postID int64) error {
+	// The CASCADE DELETE on foreign keys will handle deleting related likes, comments, etc.
+	cmdTag, err := r.executor.Exec(ctx, "DELETE FROM forum_posts WHERE id = $1", postID)
+	if err != nil {
+		return fmt.Errorf("repository.DeletePost: %w", err)
+	}
+	if cmdTag.RowsAffected() == 0 {
+		return models.ErrNotFound
+	}
+	return nil
+}
 
 func (r *Repository) CreateComment(ctx context.Context, userID string, postID int64, parentCommentID *int64, content string) (*models.ForumComment, error) {
 	tx, err := r.db.Begin(ctx)
@@ -489,30 +525,26 @@ func (r *Repository) CreateComment(ctx context.Context, userID string, postID in
 	}
 	defer tx.Rollback(ctx)
 
+	repoWithTx := r.WithTx(tx)
+
 	// 1. Insert the comment
 	commentQuery := `
 		INSERT INTO forum_comments (user_id, post_id, parent_comment_id, content)
 		VALUES ($1, $2, $3, $4)
 		RETURNING id, created_at, updated_at
 	`
-	var comment models.ForumComment
-	comment.UserID = userID
-	comment.PostID = postID
-	comment.ParentCommentID = parentCommentID
-	comment.Content = content
-
-	err = tx.QueryRow(ctx, commentQuery, userID, postID, parentCommentID, content).Scan(&comment.ID, &comment.CreatedAt, &comment.UpdatedAt)
+	var commentID int64
+	err = repoWithTx.executor.QueryRow(ctx, commentQuery, userID, postID, parentCommentID, content).Scan(&commentID)
 	if err != nil {
 		return nil, fmt.Errorf("repository.CreateComment.Insert: %w", err)
 	}
 
-	// 2. Update the post's comment count and last activity time
 	updatePostQuery := `
 		UPDATE forum_posts 
 		SET comment_count = comment_count + 1, last_activity_at = NOW() 
 		WHERE id = $1
 	`
-	if _, err := tx.Exec(ctx, updatePostQuery, postID); err != nil {
+	if _, err := repoWithTx.executor.Exec(ctx, updatePostQuery, postID); err != nil {
 		return nil, fmt.Errorf("repository.CreateComment.UpdatePost: %w", err)
 	}
 
@@ -520,14 +552,22 @@ func (r *Repository) CreateComment(ctx context.Context, userID string, postID in
 		return nil, err
 	}
 
-	// Fetch author details to populate the struct fully before returning
-	// ...
-	return &comment, nil
+	return r.FindCommentByID(ctx, commentID)
 }
 
 func (r *Repository) UpdateComment(ctx context.Context, commentID int64, content string) (*models.ForumComment, error)
 
-func (r *Repository) DeleteComment(ctx context.Context, commentID int64) error
+func (r *Repository) DeleteComment(ctx context.Context, commentID int64) error {
+	// The CASCADE DELETE on foreign keys will handle deleting related likes, comments, etc.
+	cmdTag, err := r.executor.Exec(ctx, "DELETE FROM forum_comments WHERE id = $1", commentID)
+	if err != nil {
+		return fmt.Errorf("repository.DeleteComment: %w", err)
+	}
+	if cmdTag.RowsAffected() == 0 {
+		return models.ErrNotFound
+	}
+	return nil
+}
 
 func (r *Repository) IsPostLikedByUser(ctx context.Context, userID string, postID int64) (bool, error) {
 	var exists bool
