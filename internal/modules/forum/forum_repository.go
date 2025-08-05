@@ -418,35 +418,24 @@ func (r *Repository) FindCommentsByPostID(ctx context.Context, postID int64) ([]
 }
 
 func (r *Repository) CheckPostOwnership(ctx context.Context, postID int64, userID string) (bool, error) {
-	var postUserID string
-
-	query := `SELECT user_id FROM forum_posts WHERE id = $1`
-	err := r.executor.QueryRow(ctx, query, postID).Scan(&postUserID)
+	var exists bool
+	query := `SELECT EXISTS(SELECT 1 FROM forum_posts WHERE id = $1 AND user_id = $2)`
+	err := r.executor.QueryRow(ctx, query, postID, userID).Scan(&exists)
 	if err != nil {
-		return false, fmt.Errorf("repository.CheckPostOwnership.Query: %w", err)
+		// Don't return ErrNotFound here, as the service layer might interpret it as "post not found"
+		return false, fmt.Errorf("repository.CheckPostOwnership: %w", err)
 	}
-
-	if postUserID == userID {
-		return true, nil
-	} else {
-		return false, models.ErrNotOwned
-	}
+	return exists, nil
 }
 
 func (r *Repository) CheckCommentOwnership(ctx context.Context, commentID int64, userID string) (bool, error) {
-	var cmtUserID string
-
-	query := `SELECT user_id FROM forum_comments WHERE id = $1`
-	err := r.executor.QueryRow(ctx, query, commentID).Scan(&cmtUserID)
+	var exists bool
+	query := `SELECT EXISTS(SELECT 1 FROM forum_comments WHERE id = $1 AND user_id = $2)`
+	err := r.executor.QueryRow(ctx, query, commentID, userID).Scan(&exists)
 	if err != nil {
-		return false, fmt.Errorf("repository.CheckCommentOwnership.Query: %w", err)
+		return false, fmt.Errorf("repository.CheckCommentOwnership: %w", err)
 	}
-
-	if cmtUserID == userID {
-		return true, nil
-	} else {
-		return false, models.ErrNotOwned
-	}
+	return exists, nil
 }
 
 func (r *Repository) CreatePost(ctx context.Context, userID string, data models.CreatePostRequest) (*models.ForumPost, error) {
