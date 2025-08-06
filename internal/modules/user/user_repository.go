@@ -18,6 +18,7 @@ import (
 // RepositoryInterface defines methods for interacting with user storage.
 type RepositoryInterface interface {
 	FindByID(ctx context.Context, userID string) (*models.User, error)
+	FindByIDs(ctx context.Context, userIDs []string) ([]models.User, error)
 	FindByEmail(ctx context.Context, email string) (*models.User, error)
 	FindByNickname(ctx context.Context, nickname string) (*models.User, error)
 	FindByPasswordResetToken(ctx context.Context, token string) (*models.User, error)
@@ -166,6 +167,29 @@ func (r *Repository) FindByID(ctx context.Context, userID string) (*models.User,
 		return nil, fmt.Errorf("repository.FindByID: %w", err)
 	}
 	return user, nil
+}
+
+// Used in notification service to prevent the N+1 query problem.
+func (r *Repository) FindByIDs(ctx context.Context, userIDs []string) ([]models.User, error) {
+	if len(userIDs) == 0 {
+		return []models.User{}, nil // Return empty slice if no IDs are provided
+	}
+
+	// Use the PostgreSQL ANY() operator for a clean and secure "IN" clause.
+	query := `SELECT * FROM users WHERE id = ANY($1)`
+
+	rows, err := r.db.Query(ctx, query, userIDs)
+	if err != nil {
+		return nil, fmt.Errorf("query for users by ids failed: %w", err)
+	}
+
+	// pgx.CollectRows scans all resulting rows into a slice of structs.
+	users, err := pgx.CollectRows(rows, pgx.RowToStructByName[models.User])
+	if err != nil {
+		return nil, fmt.Errorf("failed to collect user rows: %w", err)
+	}
+
+	return users, nil
 }
 
 func (r *Repository) FindByEmail(ctx context.Context, email string) (*models.User, error) {
