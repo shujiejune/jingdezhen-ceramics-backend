@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"strings"
 )
 
 // DBExecutor defines an interface for executing SQL queries.
@@ -20,20 +21,22 @@ type DBExecutor interface {
 
 // RepositoryInterface defines the methods for interacting with portfolio storage.
 type RepositoryInterface interface {
+	BeginTx(ctx context.Context) (pgx.Tx, error)
+	WithTx(tx pgx.Tx) *Repository
+
 	FindAllWorks(ctx context.Context, filters models.PortfolioFilters) ([]models.PortfolioWork, int, error)
 	FindWorkByID(ctx context.Context, workID int64) (*models.PortfolioWork, error)
+	GetWorkCountByUserID(ctx context.Context, userID string) (int, error)
 	GetWorkImages(ctx context.Context, workID int64) ([]models.PortfolioWorkImage, error)
 	GetWorkTags(ctx context.Context, workID int64) ([]string, error)
 	CreateWork(ctx context.Context, userID string, data models.CreateWorkRequest) (*models.PortfolioWork, error)
 	UpdateWork(ctx context.Context, workID int64, data models.UpdateWorkRequest) (*models.PortfolioWork, error)
 	DeleteWork(ctx context.Context, workID int64) error
-	AddKudo(ctx context.Context, userID string, workID int64) (newKudosCount int, err error)
-	RemoveKudo(ctx context.Context, userID string, workID int64) (newKudosCount int, err error)
-	CheckKudos(ctx context.Context, userID string, workIDs []int64) (map[int64]bool, error)
+	Upvote(ctx context.Context, userID string, workID int64) (newUpvotesCount int, err error)
+	Downvote(ctx context.Context, userID string, workID int64) (newUpvotesCount int, err error)
+	IsWorkUpvotedByUser(ctx context.Context, userID string, workID int64) (bool, error)
+	CheckUpvotes(ctx context.Context, userID string, workIDs []int64) (map[int64]bool, error)
 	CheckWorkOwnership(ctx context.Context, workID int64, userID string) (bool, error)
-
-	BeginTx(ctx context.Context) (pgx.Tx, error)
-	WithTx(tx pgx.Tx) *Repository
 }
 
 // Repository provides access to the portfolio storage.
@@ -59,27 +62,28 @@ func (r *Repository) WithTx(tx pgx.Tx) *Repository {
 
 // FindAllWorks retrieves a paginated and filtered list of portfolio works.
 func (r *Repository) FindAllWorks(ctx context.Context, filters models.PortfolioFilters) ([]models.PortfolioWork, int, error) {
-	var args []interface{}
-	argIdx := 1
+	var args []any
+	var whereClauses []string
+	var joinClause strings.Builder
 
-	baseQuery := `
-		FROM portfolio_works pw
-		JOIN users u ON pw.user_id = u.id
-	`
-	if filters.Category != "" {
-		baseQuery += ` JOIN portfolio_work_tags pwt ON pw.id = pwt.portfolio_work_id
-		               JOIN tags t ON pwt.tag_id = t.id`
+	// Start with a base WHERE clause that is always true
+	whereClauses = append(whereClauses, "1=1")
+
+	if len(filters.Tags) > 0 {
+		// Add the JOIN clause needed for tag filtering
+		joinClause.WriteString(` JOIN portfolio_work_tags pwt ON pw.id = pwt.portfolio_work_id
+		                         JOIN tags t ON pwt.tag_id = t.id`)
+		// Add the WHERE clause for tags using ANY for efficiency
+		args = append(args, filters.Tags)
+		whereClauses = append(whereClauses, fmt.Sprintf("t.name = ANY($%d)", len(args)))
 	}
 
-	whereClause := "WHERE 1=1"
-	if filters.Category != "" {
-		whereClause += fmt.Sprintf(" AND t.name = $%d", argIdx)
-		args = append(args, filters.Category)
-		argIdx++
-	}
+	finalWhereClause := "WHERE " + strings.Join(whereClauses, " AND ")
+
+	baseQuery := fmt.Sprintf(`FROM portfolio_works pw JOIN users u ON pw.user_id = u.id %s`, joinClause.String())
 
 	var total int
-	countQuery := "SELECT COUNT(DISTINCT pw.id) " + baseQuery + whereClause
+	countQuery := "SELECT COUNT(DISTINCT pw.id) " + baseQuery + finalWhereClause
 	if err := r.executor.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("repository.FindAllWorks.Count: %w", err)
 	}
@@ -88,37 +92,31 @@ func (r *Repository) FindAllWorks(ctx context.Context, filters models.PortfolioF
 	}
 
 	orderByClause := "ORDER BY pw.created_at DESC"
-	if filters.Sort == "kudos" {
-		orderByClause = "ORDER BY pw.kudos_count DESC, pw.created_at DESC"
+	if filters.Sort == "upvotes" {
+		orderByClause = "ORDER BY pw.upvotes_count DESC, pw.created_at DESC"
 	}
+
+	// Add pagination arguments
+	args = append(args, filters.Limit, (filters.Page-1)*filters.Limit)
+	limitOffsetClause := fmt.Sprintf(" %s LIMIT $%d OFFSET $%d", orderByClause, len(args)-1, len(args))
 
 	selectQuery := `
 		SELECT DISTINCT pw.id, pw.user_id, u.nickname as creator_nickname, pw.title,
-		       pw.is_editors_choice, pw.kudos_count, pw.created_at, pw.updated_at,
+		       pw.is_editors_choice, pw.upvotes_count, pw.created_at, pw.updated_at,
 		       (SELECT image_url FROM portfolio_work_images WHERE portfolio_work_id = pw.id AND is_thumbnail = TRUE LIMIT 1) as thumbnail_url
 	`
-	limitOffsetClause := fmt.Sprintf(" %s LIMIT $%d OFFSET $%d", orderByClause, argIdx, argIdx+1)
-	args = append(args, filters.Limit, (filters.Page-1)*filters.Limit)
 
-	fullQuery := selectQuery + baseQuery + whereClause + limitOffsetClause
+	fullQuery := selectQuery + baseQuery + finalWhereClause + limitOffsetClause
 	rows, err := r.executor.Query(ctx, fullQuery, args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("repository.FindAllWorks.Query: %w", err)
 	}
-	defer rows.Close()
 
-	works := []models.PortfolioWork{}
-	for rows.Next() {
-		var work models.PortfolioWork
-		if err := rows.Scan(
-			&work.ID, &work.UserID, &work.CreatorNickname, &work.Title,
-			&work.IsEditorsChoice, &work.KudosCount, &work.CreatedAt, &work.UpdatedAt,
-			&work.ThumbnailURL,
-		); err != nil {
-			return nil, 0, fmt.Errorf("repository.FindAllWorks.Scan: %w", err)
-		}
-		works = append(works, work)
+	works, err := pgx.CollectRows(rows, pgx.RowToStructByName[models.PortfolioWork])
+	if err != nil {
+		return nil, 0, fmt.Errorf("repository.FindAllWorks.Scan: %w", err)
 	}
+
 	return works, total, nil
 }
 
@@ -127,14 +125,14 @@ func (r *Repository) FindWorkByID(ctx context.Context, workID int64) (*models.Po
 	var work models.PortfolioWork
 	query := `
 		SELECT pw.id, pw.user_id, u.nickname as creator_nickname, pw.title, pw.description,
-		       pw.is_editors_choice, pw.kudos_count, pw.created_at, pw.updated_at
+		       pw.is_editors_choice, pw.upvotes_count, pw.created_at, pw.updated_at
 		FROM portfolio_works pw
 		JOIN users u ON pw.user_id = u.id
 		WHERE pw.id = $1
 	`
 	err := r.executor.QueryRow(ctx, query, workID).Scan(
 		&work.ID, &work.UserID, &work.CreatorNickname, &work.Title, &work.Description,
-		&work.IsEditorsChoice, &work.KudosCount, &work.CreatedAt, &work.UpdatedAt,
+		&work.IsEditorsChoice, &work.UpvotesCount, &work.CreatedAt, &work.UpdatedAt,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -143,6 +141,158 @@ func (r *Repository) FindWorkByID(ctx context.Context, workID int64) (*models.Po
 		return nil, fmt.Errorf("repository.FindWorkByID: %w", err)
 	}
 	return &work, nil
+}
+
+// GetWorkCountByUserID counts the number of works a user has created.
+func (r *Repository) GetWorkCountByUserID(ctx context.Context, userID string) (int, error) {
+	var count int
+	query := `SELECT COUNT(*) FROM portfolio_works WHERE user_id = $1`
+	err := r.executor.QueryRow(ctx, query, userID).Scan(&count)
+	return count, err
+}
+
+// GetWorkImages retrieves all images for a given portfolio work.
+func (r *Repository) GetWorkImages(ctx context.Context, workID int64) ([]models.PortfolioWorkImage, error) {
+	query := `SELECT id, image_url, is_thumbnail, caption FROM portfolio_work_images WHERE portfolio_work_id = $1 ORDER BY id`
+	rows, err := r.executor.Query(ctx, query, workID)
+	if err != nil {
+		return nil, fmt.Errorf("repository.GetWorkImages.Query: %w", err)
+	}
+	return pgx.CollectRows(rows, pgx.RowToStructByName[models.PortfolioWorkImage])
+}
+
+// GetWorkTags retrieves all tag names for a given portfolio work.
+func (r *Repository) GetWorkTags(ctx context.Context, workID int64) ([]string, error) {
+	query := `
+		SELECT t.name
+		FROM tags t
+		JOIN portfolio_work_tags pwt ON t.id = pwt.tag_id
+		WHERE pwt.portfolio_work_id = $1
+		ORDER BY t.name
+	`
+	rows, err := r.executor.Query(ctx, query, workID)
+	if err != nil {
+		return nil, fmt.Errorf("repository.GetWorkTags.Query: %w", err)
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[string])
+}
+
+// linkTagsToWork is a helper function to be used within a transaction.
+func (r *Repository) linkTagsToWork(ctx context.Context, workID int64, tags []string) error {
+	// First, find or create all tags and get their IDs
+	tagIDs := make([]int64, 0, len(tags))
+	for _, tagName := range tags {
+		var tagID int64
+		// Use ON CONFLICT to atomically find or create a tag
+		query := `
+			WITH ins AS (
+				INSERT INTO tags (name) VALUES ($1)
+				ON CONFLICT (name) DO NOTHING
+				RETURNING id
+			)
+			SELECT id FROM ins
+			UNION ALL
+			SELECT id FROM tags WHERE name = $1 LIMIT 1
+		`
+		err := r.executor.QueryRow(ctx, query, tagName).Scan(&tagID)
+		if err != nil {
+			return fmt.Errorf("linking tag '%s': %w", tagName, err)
+		}
+		tagIDs = append(tagIDs, tagID)
+	}
+
+	// Now, bulk insert the associations into the junction table
+	tagLinkRows := make([][]interface{}, len(tagIDs))
+	for i, tagID := range tagIDs {
+		tagLinkRows[i] = []interface{}{workID, tagID}
+	}
+
+	_, err := r.executor.CopyFrom(
+		ctx,
+		pgx.Identifier{"portfolio_work_tags"},
+		[]string{"portfolio_work_id", "tag_id"},
+		pgx.CopyFromRows(tagLinkRows),
+	)
+	return err
+}
+
+// CreateWork transactionally creates a new portfolio work, its images, and its tags.
+func (r *Repository) CreateWork(ctx context.Context, userID string, data models.CreateWorkRequest) (*models.PortfolioWork, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	repoTx := r.WithTx(tx)
+
+	// 1. Insert the main portfolio work record
+	var workID int64
+	workQuery := `
+		INSERT INTO portfolio_works (user_id, title, description)
+		VALUES ($1, $2, $3)
+		RETURNING id
+	`
+	if err := repoTx.executor.QueryRow(ctx, workQuery, userID, data.Title, data.Description).Scan(&workID); err != nil {
+		return nil, fmt.Errorf("repository.CreateWork.InsertWork: %w", err)
+	}
+
+	// 2. Bulk insert images using CopyFrom for high performance
+	if len(data.ImageURLs) > 0 {
+		imageRows := make([][]any, len(data.ImageURLs))
+		for i, url := range data.ImageURLs {
+			isThumbnail := data.ThumbnailURLIndex != nil && *data.ThumbnailURLIndex == i
+			imageRows[i] = []any{workID, url, isThumbnail, ""} // caption is empty on create
+		}
+		_, err := repoTx.executor.CopyFrom(
+			ctx,
+			pgx.Identifier{"portfolio_work_images"},
+			[]string{"portfolio_work_id", "image_url", "is_thumbnail", "caption"},
+			pgx.CopyFromRows(imageRows),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("repository.CreateWork.CopyFromImages: %w", err)
+		}
+	}
+
+	// 3. Handle tags: find existing or create new ones, then link them
+	if len(data.Tags) > 0 {
+		if err := repoTx.linkTagsToWork(ctx, workID, data.Tags); err != nil {
+			return nil, fmt.Errorf("repository.CreateWork.LinkTags: %w", err)
+		}
+	}
+
+	// Commit the transaction
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+
+	// 4. Fetch the newly created work to return it
+	return repoTx.FindWorkByID(ctx, workID)
+}
+
+func (r *Repository) UpdateWork(ctx context.Context, workID int64, data models.UpdateWorkRequest) (*models.PortfolioWork, error) {
+	// This would also be a transactional operation.
+	// 1. Begin Tx
+	// 2. Update the portfolio_works table with new title/description
+	// 3. Delete existing images and tags associations
+	// 4. Insert new images and link new tags (similar to CreateWork)
+	// 5. Commit Tx
+	// 6. Return the updated work
+	return nil, errors.New("update work not implemented")
+}
+
+// DeleteWork deletes a portfolio work. The ON DELETE CASCADE in the DB handles related data.
+func (r *Repository) DeleteWork(ctx context.Context, workID int64) error {
+	query := `DELETE FROM portfolio_works WHERE id = $1`
+	cmdTag, err := r.executor.Exec(ctx, query, workID)
+	if err != nil {
+		return fmt.Errorf("repository.DeleteWork: %w", err)
+	}
+	if cmdTag.RowsAffected() == 0 {
+		return models.ErrNotFound
+	}
+	return nil
 }
 
 // CheckWorkOwnership verifies if a user is the creator of a portfolio work.
@@ -156,32 +306,97 @@ func (r *Repository) CheckWorkOwnership(ctx context.Context, workID int64, userI
 	return exists, nil
 }
 
-// AddKudo transactionally adds a kudo and updates the kudos count.
-func (r *Repository) AddKudo(ctx context.Context, userID string, workID int64) (int, error) {
+// CheckUpvotes checks which of a list of work IDs a user has upvoted.
+func (r *Repository) CheckUpvotes(ctx context.Context, userID string, workIDs []int64) (map[int64]bool, error) {
+	if len(workIDs) == 0 || userID == "" {
+		return map[int64]bool{}, nil
+	}
+
+	query := `SELECT portfolio_work_id FROM portfolio_work_upvotes WHERE user_id = $1 AND portfolio_work_id = ANY($2)`
+	rows, err := r.executor.Query(ctx, query, userID, workIDs)
+	if err != nil {
+		return nil, fmt.Errorf("repository.CheckUpvotes.Query: %w", err)
+	}
+
+	upvoteMap := make(map[int64]bool, len(workIDs))
+	for rows.Next() {
+		var workID int64
+		if err := rows.Scan(&workID); err != nil {
+			return nil, fmt.Errorf("repository.CheckUpvotes.Scan: %w", err)
+		}
+		upvoteMap[workID] = true
+	}
+
+	if rows.Err() != nil {
+		return nil, fmt.Errorf("repository.CheckUpvotes.RowsErr: %w", rows.Err())
+	}
+
+	return upvoteMap, nil
+}
+
+func (r *Repository) IsWorkUpvotedByUser(ctx context.Context, userID string, workID int64) (bool, error) {
+	var exists bool
+	query := `SELECT EXISTS(SELECT 1 FROM portfolio_work_upvotes WHERE user_id = $1 AND work_id = $2)`
+	err := r.executor.QueryRow(ctx, query, userID, workID).Scan(&exists)
+	return exists, err
+}
+
+// Upvote transactionally upvotes and updates the upvotes count.
+func (r *Repository) Upvote(ctx context.Context, userID string, workID int64) (int, error) {
 	tx, err := r.db.Begin(ctx)
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
 
-	insertQuery := `INSERT INTO portfolio_work_kudos (user_id, portfolio_work_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`
+	insertQuery := `INSERT INTO portfolio_work_upvotes (user_id, portfolio_work_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`
 	cmdTag, err := tx.Exec(ctx, insertQuery, userID, workID)
 	if err != nil {
-		return 0, fmt.Errorf("repository.AddKudo.Insert: %w", err)
+		return 0, fmt.Errorf("repository.Upvote.Insert: %w", err)
 	}
 
 	if cmdTag.RowsAffected() > 0 {
-		updateQuery := `UPDATE portfolio_works SET kudos_count = kudos_count + 1 WHERE id = $1`
+		updateQuery := `UPDATE portfolio_works SET upvotes_count = upvotes_count + 1 WHERE id = $1`
 		if _, err := tx.Exec(ctx, updateQuery, workID); err != nil {
-			return 0, fmt.Errorf("repository.AddKudo.Update: %w", err)
+			return 0, fmt.Errorf("repository.Upvote.Update: %w", err)
 		}
 	}
 
-	var newKudosCount int
-	countQuery := `SELECT kudos_count FROM portfolio_works WHERE id = $1`
-	if err := tx.QueryRow(ctx, countQuery, workID).Scan(&newKudosCount); err != nil {
-		return 0, fmt.Errorf("repository.AddKudo.Select: %w", err)
+	var newUpvotesCount int
+	countQuery := `SELECT upvotes_count FROM portfolio_works WHERE id = $1`
+	if err := tx.QueryRow(ctx, countQuery, workID).Scan(&newUpvotesCount); err != nil {
+		return 0, fmt.Errorf("repository.Upvote.Select: %w", err)
 	}
 
-	return newKudosCount, tx.Commit(ctx)
+	return newUpvotesCount, tx.Commit(ctx)
+}
+
+// Downvote transactionally removes upvote and updates the upvotes count.
+func (r *Repository) Downvote(ctx context.Context, userID string, workID int64) (int, error) {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	deleteQuery := `DELETE FROM portfolio_work_upvotes WHERE user_id = $1 AND portfolio_work_id = $2`
+	cmdTag, err := tx.Exec(ctx, deleteQuery, userID, workID)
+	if err != nil {
+		return 0, fmt.Errorf("repository.Upvote.Delete: %w", err)
+	}
+
+	if cmdTag.RowsAffected() > 0 {
+		updateQuery := `UPDATE portfolio_works SET upvotes_count = upvotes_count - 1 WHERE id = $1`
+		if _, err := tx.Exec(ctx, updateQuery, workID); err != nil {
+			return 0, fmt.Errorf("repository.Downvote.Update: %w", err)
+		}
+	}
+
+	var newUpvotesCount int
+	countQuery := `SELECT upvotes_count FROM portfolio_works WHERE id = $1`
+	if err := tx.QueryRow(ctx, countQuery, workID).Scan(&newUpvotesCount); err != nil {
+		return 0, fmt.Errorf("repository.Downvote.Select: %w", err)
+	}
+
+	return newUpvotesCount, tx.Commit(ctx)
 }

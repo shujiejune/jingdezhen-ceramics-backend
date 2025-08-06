@@ -6,6 +6,7 @@ import (
 	"jingdezhen-ceramics-backend/pkg/utils"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-playground/validator/v10"
 	"github.com/labstack/echo/v4"
@@ -27,16 +28,21 @@ func NewHandler(service ServiceInterface) *Handler {
 
 // GetWorks handles requests to get a paginated list of portfolio works.
 func (h *Handler) GetWorks(c echo.Context) error {
-	userID, _ := utils.GetUserIDFromContext(c) // Optional: for kudos status
+	userID, _ := utils.GetUserIDFromContext(c) // Optional: for upvotes status
 	page, limit := utils.GetPageLimit(c)
-	category := c.QueryParam("category")
 	sort := c.QueryParam("sort")
+	tagsQuery := c.QueryParam("tags")
+	var tags []string
+	if tagsQuery != "" {
+		// Split the comma-separated string into a slice
+		tags = strings.Split(tagsQuery, ",")
+	}
 
 	filters := models.PortfolioFilters{
-		Page:     page,
-		Limit:    limit,
-		Category: category,
-		Sort:     sort,
+		Page:  page,
+		Limit: limit,
+		Tags:  tags,
+		Sort:  sort,
 	}
 
 	works, total, err := h.service.GetWorks(c.Request().Context(), userID, filters)
@@ -146,8 +152,8 @@ func (h *Handler) DeleteWork(c echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
-// LeaveKudo handles requests from authenticated users to leave a kudo on a work.
-func (h *Handler) LeaveKudo(c echo.Context) error {
+// ToggleWorkUpvote handles requests from authenticated users to upvote or downvote a work.
+func (h *Handler) ToggleWorkUpvote(c echo.Context) error {
 	userID, err := utils.GetUserIDFromContext(c)
 	if err != nil {
 		return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: err.Error()})
@@ -157,13 +163,13 @@ func (h *Handler) LeaveKudo(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid work ID"})
 	}
 
-	newCount, err := h.service.LeaveKudo(c.Request().Context(), userID, workID)
+	result, err := h.service.ToggleWorkUpvote(c.Request().Context(), userID, workID)
 	if err != nil {
 		if errors.Is(err, models.ErrNotFound) {
 			return c.JSON(http.StatusNotFound, models.ErrorResponse{Message: "Portfolio work not found"})
 		}
-		c.Logger().Error("Handler.LeaveKudo: ", err)
-		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to leave kudo"})
+		c.Logger().Error("Handler.ToggleWorkUpvote: ", err)
+		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to upvote"})
 	}
-	return c.JSON(http.StatusOK, map[string]int{"kudos_count": newCount})
+	return c.JSON(http.StatusOK, result)
 }

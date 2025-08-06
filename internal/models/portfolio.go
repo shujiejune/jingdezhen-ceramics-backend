@@ -16,38 +16,45 @@ type PortfolioWork struct {
 	UserID          string               `json:"user_id" db:"user_id"`
 	CreatorNickname string               `json:"creator_nickname" db:"creator_nickname"`
 	Title           string               `json:"title" db:"title"`
-	Description     string               `json:"description,omitempty" db:"description"` // Full description for detail view
+	Description     *string              `json:"description,omitempty" db:"description"`
 	IsEditorsChoice bool                 `json:"is_editors_choice" db:"is_editors_choice"`
-	KudosCount      int                  `json:"kudos_count" db:"kudos_count"`
+	UpvotesCount    int                  `json:"upvotes_count" db:"upvotes_count"`
 	CreatedAt       time.Time            `json:"created_at" db:"created_at"`
 	UpdatedAt       time.Time            `json:"updated_at" db:"updated_at"`
 	ThumbnailURL    string               `json:"thumbnail_url,omitempty" db:"-"` // Derived from images for list view
 	Images          []PortfolioWorkImage `json:"images,omitempty" db:"-"`        // For detail view
 	Tags            []string             `json:"tags,omitempty" db:"-"`          // Loaded separately
-	// User-specific field, populated in the service layer
-	HasMyKudo bool `json:"has_my_kudo" db:"-"`
+	UpvotedByMe     bool                 `json:"upvoted_by_me" db:"-"`           //user-specific
+	SavedByMe       bool                 `json:"saved_by_me" db:"-"`             //user-specific
 }
 
 // PortfolioFilters defines the available query parameters for filtering portfolio works.
 type PortfolioFilters struct {
-	Page     int
-	Limit    int
-	Category string // This will filter by tags
-	Sort     string // "kudos", "latest" (default)
+	Page  int
+	Limit int
+	Sort  string // "upvotes", "latest" (default)
+	Tags  []string
 }
 
 // CreateWorkRequest defines the request body for creating a new portfolio work.
 type CreateWorkRequest struct {
 	Title             string   `json:"title" validate:"required,min=3,max=255"`
-	Description       string   `json:"description" validate:"required,min=10"`
-	ImageURLs         []string `json:"image_urls" validate:"required,min=1,dive,url"`
+	Description       *string  `json:"description" validate:"required,min=10"`
+	ImageURLs         []string `json:"image_urls" validate:"required,min=1,max=8,dive,url"`
 	ThumbnailURLIndex *int     `json:"thumbnail_url_index,omitempty" validate:"omitempty,gte=0"` // Index in ImageURLs to use as thumbnail
 	Tags              []string `json:"tags,omitempty"`
 }
 
 // UpdateWorkRequest defines the request body for updating a portfolio work.
 type UpdateWorkRequest struct {
-	Title       *string  `json:"title,omitempty" validate:"omitempty,min=3,max=255"`
-	Description *string  `json:"description,omitempty" validate:"omitempty,min=10"`
-	Tags        []string `json:"tags,omitempty"` // For now, images are not updatable via this endpoint
+	Title       *string              `json:"title,omitempty" validate:"omitempty,min=3,max=255"`
+	Description *string              `json:"description,omitempty" validate:"omitempty,min=10"`
+	Images      []PortfolioWorkImage `json:"images,omitempty" validate:"max=8"`
+	Tags        []string             `json:"tags,omitempty"`
+}
+
+// ToggleUpvoteResult is a generic response for upvote/downvote actions.
+type ToggleUpvoteResult struct {
+	IsUpvoted bool `json:"is_upvoted"`
+	NewCount  int  `json:"new_count"`
 }

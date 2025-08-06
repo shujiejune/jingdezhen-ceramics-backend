@@ -4,6 +4,12 @@ import (
 	"context"
 	"fmt"
 	"jingdezhen-ceramics-backend/internal/models"
+	"log"
+)
+
+const (
+	// Define the business rule for submission limits.
+	maxPortfolioWorksPerUser = 20
 )
 
 // ServiceInterface defines the methods for portfolio business logic.
@@ -13,7 +19,7 @@ type ServiceInterface interface {
 	CreateWork(ctx context.Context, userID string, data models.CreateWorkRequest) (*models.PortfolioWork, error)
 	UpdateWork(ctx context.Context, userID string, workID int64, data models.UpdateWorkRequest) (*models.PortfolioWork, error)
 	DeleteWork(ctx context.Context, userID, userRole string, workID int64) error
-	LeaveKudo(ctx context.Context, userID string, workID int64) (int, error)
+	ToggleWorkUpvote(ctx context.Context, userID string, workID int64) (*models.ToggleUpvoteResult, error)
 }
 
 // Service provides business logic for the portfolio module.
@@ -38,14 +44,14 @@ func (s *Service) GetWorks(ctx context.Context, userID string, filters models.Po
 		for i, work := range works {
 			workIDs[i] = work.ID
 		}
-		kudoMap, err := s.repo.CheckKudos(ctx, userID, workIDs)
+		upvoteMap, err := s.repo.CheckUpvotes(ctx, userID, workIDs)
 		if err != nil {
-			// Log but don't fail the entire request, as kudos status is non-critical.
-			fmt.Printf("WARN: could not check kudos for user %s: %v\n", userID, err)
+			// Log but don't fail the entire request, as upvotes status is non-critical.
+			fmt.Printf("WARN: could not check upvotes for user %s: %v\n", userID, err)
 		}
 		for i := range works {
-			if kudoMap[works[i].ID] {
-				works[i].HasMyKudo = true
+			if upvoteMap[works[i].ID] {
+				works[i].UpvotedByMe = true
 			}
 		}
 	}
@@ -73,20 +79,26 @@ func (s *Service) GetWorkByID(ctx context.Context, userID string, workID int64) 
 	work.Tags = tags
 
 	if userID != "" {
-		kudoMap, err := s.repo.CheckKudos(ctx, userID, []int64{workID})
+		upvoted, err := s.repo.IsWorkUpvotedByUser(ctx, userID, workID)
 		if err != nil {
-			fmt.Printf("WARN: could not check kudo for work %d, user %s: %v\n", workID, userID, err)
+			log.Printf("WARN: could not check upvote for work %d, user %s: %v\n", workID, userID, err)
 		}
-		if kudoMap[workID] {
-			work.HasMyKudo = true
-		}
+		work.UpvotedByMe = upvoted
 	}
 	return work, nil
 }
 
 // CreateWork handles the business logic for creating a new portfolio work.
 func (s *Service) CreateWork(ctx context.Context, userID string, data models.CreateWorkRequest) (*models.PortfolioWork, error) {
-	// Business logic could be added here, e.g., checking if a user has reached a submission limit.
+	// Check if the user has reached their submission limit.
+	count, err := s.repo.GetWorkCountByUserID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("service.CreateWork.GetWorkCount: %w", err)
+	}
+	if count >= maxPortfolioWorksPerUser {
+		return nil, models.ErrLimitExceeded // Return a specific application error
+	}
+
 	return s.repo.CreateWork(ctx, userID, data)
 }
 
@@ -116,11 +128,22 @@ func (s *Service) DeleteWork(ctx context.Context, userID, userRole string, workI
 	return s.repo.DeleteWork(ctx, workID)
 }
 
-// LeaveKudo handles the business logic for a user leaving a kudo on a work.
-func (s *Service) LeaveKudo(ctx context.Context, userID string, workID int64) (int, error) {
-	_, err := s.repo.FindWorkByID(ctx, workID)
+// ToggleWorkUpvote handles the business logic for a user upvoting a work.
+func (s *Service) ToggleWorkUpvote(ctx context.Context, userID string, workID int64) (*models.ToggleUpvoteResult, error) {
+	isUpvoted, err := s.repo.IsWorkUpvotedByUser(ctx, userID, workID)
 	if err != nil {
-		return 0, err // Ensure work exists before trying to kudo it.
+		return nil, err
 	}
-	return s.repo.AddKudo(ctx, userID, workID)
+
+	var newCount int
+	if isUpvoted {
+		newCount, err = s.repo.Downvote(ctx, userID, workID)
+	} else {
+		newCount, err = s.repo.Upvote(ctx, userID, workID)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	return &models.ToggleUpvoteResult{IsUpvoted: !isUpvoted, NewCount: newCount}, nil
 }

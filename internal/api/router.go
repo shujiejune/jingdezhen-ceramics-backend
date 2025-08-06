@@ -162,7 +162,7 @@ func SetupRoutes(
 			authPortfolioGroup.POST("/works", portfolioHandler.CreateWork)
 			authPortfolioGroup.PUT("/works/:work_id", portfolioHandler.UpdateWork)
 			authPortfolioGroup.DELETE("/works/:work_id", portfolioHandler.DeleteWork)
-			authPortfolioGroup.POST("/works/:work_id/kudos", portfolioHandler.LeaveKudo)
+			authPortfolioGroup.POST("/works/:work_id/upvotes", portfolioHandler.ToggleWorkUpvote)
 		}
 	}
 
