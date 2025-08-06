@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"jingdezhen-ceramics-backend/internal/models"
+	"jingdezhen-ceramics-backend/internal/modules/notification"
 	"log"
 )
 
@@ -27,11 +28,12 @@ type ServiceInterface interface {
 }
 
 type Service struct {
-	repo RepositoryInterface
+	repo            RepositoryInterface
+	notificationSvc notification.ServiceInterface
 }
 
 func NewService(repo RepositoryInterface) ServiceInterface {
-	return &Service{repo: repo}
+	return &Service{repo: repo, notificationSvc: notificationSvc}
 }
 
 // --- Private Helper Functions ---
@@ -208,7 +210,7 @@ func (s *Service) DeletePost(ctx context.Context, userID, userRole string, postI
 func (s *Service) CreateComment(ctx context.Context, userID string, postID int64, parentCommentID *int64, content string) (*models.ForumComment, error) {
 	// Business logic:
 	// 1. Check if post exists
-	_, err := s.repo.FindPostByID(ctx, postID)
+	post, err := s.repo.FindPostByID(ctx, postID)
 	if err != nil {
 		return nil, fmt.Errorf("service.CreateComment.FindPost: %w", err)
 	}
@@ -232,8 +234,15 @@ func (s *Service) CreateComment(ctx context.Context, userID string, postID int64
 
 	// 4. After success, send notification to the original author
 	go func() {
+		params := models.CreateNotificationParams{
+			RecipientUserID: post.UserID,
+			ActorUserID:     userID,
+			Type:            models.NotificationTypeForumPostCommented,
+			EntityType:      "forum_comment",
+			EntityID:        savedComment.ID,
+		}
 		// Use context.Background() for background tasks
-		s.notificationSvc.SendNewCommentNotification(context.Background(), savedComment)
+		s.notificationSvc.CreateNotification(context.Background(), params)
 		log.Printf("INFO: Triggered notification for new comment %d", savedComment.ID)
 	}()
 

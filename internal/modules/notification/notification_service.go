@@ -15,7 +15,7 @@ type WebSocketService interface {
 }
 
 // Service provides business logic for notifications.
-type Service interface {
+type ServiceInterface interface {
 	CreateNotification(ctx context.Context, params models.CreateNotificationParams) (*models.Notification, error)
 	// GetNotificationsForUser should ideally return the composed notifications with ActorUser populated.
 	// This composition logic lives here in the service.
@@ -25,14 +25,14 @@ type Service interface {
 	MarkAllNotificationsAsRead(ctx context.Context, userID string) error
 }
 
-type service struct {
+type Service struct {
 	repo             Repository
 	userRepo         user.Repository
 	webSocketService WebSocketService
 }
 
 // NewService creates a new notification service.
-func NewService(repo Repository, userRepo user.Repository, wsService WebSocketService) Service {
+func NewService(repo Repository, userRepo user.Repository, wsService WebSocketService) ServiceInterface {
 	return &service{
 		repo:             repo,
 		userRepo:         userRepo,
@@ -41,7 +41,7 @@ func NewService(repo Repository, userRepo user.Repository, wsService WebSocketSe
 }
 
 // CreateNotification creates a new notification, saves it, and pushes it in real-time if the user is online.
-func (s *service) CreateNotification(ctx context.Context, params models.CreateNotificationParams) (*models.Notification, error) {
+func (s *Service) CreateNotification(ctx context.Context, params models.CreateNotificationParams) (*models.Notification, error) {
 	message, err := s.generateMessage(params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate notification message: %w", err)
@@ -96,7 +96,7 @@ func mapKeysToSlice(m map[string]struct{}) []string {
 }
 
 // GetNotificationsForUser retrieves notifications and composes them with actor details.
-func (s *service) GetNotificationsForUser(ctx context.Context, userID string, page, limit int) ([]models.Notification, int64, error) {
+func (s *Service) GetNotificationsForUser(ctx context.Context, userID string, page, limit int) ([]models.Notification, int64, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -159,11 +159,11 @@ func (s *service) GetNotificationsForUser(ctx context.Context, userID string, pa
 	return notifications, total, nil
 }
 
-func (s *service) GetUnreadNotificationCount(ctx context.Context, userID string) (int64, error) {
+func (s *Service) GetUnreadNotificationCount(ctx context.Context, userID string) (int64, error) {
 	return s.repo.GetUnreadCount(ctx, userID)
 }
 
-func (s *service) MarkNotificationAsRead(ctx context.Context, notificationID int64, userID string) error {
+func (s *Service) MarkNotificationAsRead(ctx context.Context, notificationID int64, userID string) error {
 	updated, err := s.repo.MarkAsRead(ctx, notificationID, userID)
 	if err != nil {
 		return err
@@ -174,13 +174,13 @@ func (s *service) MarkNotificationAsRead(ctx context.Context, notificationID int
 	return nil
 }
 
-func (s *service) MarkAllNotificationsAsRead(ctx context.Context, userID string) error {
+func (s *Service) MarkAllNotificationsAsRead(ctx context.Context, userID string) error {
 	_, err := s.repo.MarkAllAsRead(ctx, userID)
 	return err
 }
 
 // generateMessage constructs the human-readable notification message.
-func (s *service) generateMessage(params models.CreateNotificationParams) (string, error) {
+func (s *Service) generateMessage(params models.CreateNotificationParams) (string, error) {
 	// NOTE: This function would use the userRepo to get the actor's name.
 	actorName := params.ExtraData["actorName"]
 	if actorName == "" {
