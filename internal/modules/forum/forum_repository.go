@@ -43,6 +43,7 @@ type RepositoryInterface interface {
 	UpdateComment(ctx context.Context, commentID int64, content string) (*models.ForumComment, error)
 	DeleteComment(ctx context.Context, commentID int64) error
 
+	GetSavedForumPosts(ctx context.Context, userID string, page, limit int) ([]models.SavedPostEntry, int, error)
 	IsPostLikedByUser(ctx context.Context, userID string, postID int64) (bool, error)
 	IsPostSavedByUser(ctx context.Context, userID string, postID int64) (bool, error)
 	IsCommentLikedByUser(ctx context.Context, userID string, commentID int64) (bool, error)
@@ -643,6 +644,59 @@ func (r *Repository) DeleteComment(ctx context.Context, commentID int64) error {
 		return models.ErrNotFound
 	}
 	return nil
+}
+
+// GetSavedForumPosts retrieves a paginated list of posts a user has saved.
+func (r *Repository) GetSavedForumPosts(ctx context.Context, userID string, page, limit int) ([]models.SavedPostEntry, int, error) {
+	// 1. Get the total count of saved posts for accurate pagination.
+	var total int
+	countQuery := `SELECT COUNT(*) FROM forum_post_saves WHERE user_id = $1`
+	if err := r.executor.QueryRow(ctx, countQuery, userID).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("repository.GetSavedForumPosts.Count: %w", err)
+	}
+
+	if total == 0 {
+		return []models.SavedPostEntry{}, 0, nil
+	}
+
+	// 2. Fetch the paginated data in a single query.
+	offset := (page - 1) * limit
+	query := `
+		SELECT
+			fp.id,
+			fp.title,
+			fp.category_id,
+			c.name AS category_name,
+			u.nickname AS author_nickname,
+			fp.last_activity_at,
+			fps.created_at AS saved_at
+		FROM
+			forum_post_saves fps
+		JOIN
+			forum_posts fp ON fps.post_id = fp.id
+		JOIN
+			users u ON fp.user_id = u.id
+		LEFT JOIN
+			forum_categories c ON fp.category_id = c.id
+		WHERE
+			fps.user_id = $1
+		ORDER BY
+			saved_at DESC
+		LIMIT $2 OFFSET $3
+	`
+
+	rows, err := r.executor.Query(ctx, query, userID, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("repository.GetSavedForumPosts.Query: %w", err)
+	}
+
+	// 3. Use pgx.CollectRows to scan all results directly into the slice of structs.
+	savedPosts, err := pgx.CollectRows(rows, pgx.RowToStructByName[models.SavedPostEntry])
+	if err != nil {
+		return nil, 0, fmt.Errorf("repository.GetSavedForumPosts.Scan: %w", err)
+	}
+
+	return savedPosts, total, nil
 }
 
 func (r *Repository) IsPostLikedByUser(ctx context.Context, userID string, postID int64) (bool, error) {

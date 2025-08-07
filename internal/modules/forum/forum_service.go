@@ -15,6 +15,8 @@ type ServiceInterface interface {
 	GetCategories(ctx context.Context) ([]models.ForumCategory, error)
 	GetTags(ctx context.Context) ([]models.Tag, error)
 
+	GetSavedForumPosts(ctx context.Context, userID string, page, limit int) ([]models.SavedPostEntry, int, error)
+
 	CreatePost(ctx context.Context, userID string, data models.CreatePostRequest) (*models.ForumPost, error)
 	UpdatePost(ctx context.Context, userID string, postID int64, data models.UpdatePostRequest) (*models.ForumPost, error)
 	DeletePost(ctx context.Context, userID, userRole string, postID int64) error
@@ -28,12 +30,12 @@ type ServiceInterface interface {
 }
 
 type Service struct {
-	repo            RepositoryInterface
-	notificationSvc notification.ServiceInterface
+	repo     RepositoryInterface
+	notifSvc notification.ServiceInterface
 }
 
-func NewService(repo RepositoryInterface) ServiceInterface {
-	return &Service{repo: repo, notificationSvc: notificationSvc}
+func NewService(repo RepositoryInterface, notifSvc notification.ServiceInterface) ServiceInterface {
+	return &Service{repo: repo, notifSvc: notifSvc}
 }
 
 // --- Private Helper Functions ---
@@ -167,6 +169,20 @@ func (s *Service) GetTags(ctx context.Context) ([]models.Tag, error) {
 	return s.repo.FindAllTags(ctx)
 }
 
+func (s *Service) GetSavedForumPosts(ctx context.Context, userID string, page, limit int) ([]models.SavedPostEntry, int, error) {
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 || limit > 100 {
+		limit = 20
+	} // Default/max limit
+	savedForumPosts, total, err := s.repo.GetSavedForumPosts(ctx, userID, page, limit)
+	if err != nil {
+		return nil, 0, fmt.Errorf("service.GetSavedForumPosts: %w", err)
+	}
+	return savedForumPosts, total, nil
+}
+
 // CreatePost handles the business logic for creating a new post.
 func (s *Service) CreatePost(ctx context.Context, userID string, data models.CreatePostRequest) (*models.ForumPost, error) {
 	// Business logic: Validate that the CategoryID exists.
@@ -242,7 +258,7 @@ func (s *Service) CreateComment(ctx context.Context, userID string, postID int64
 			EntityID:        savedComment.ID,
 		}
 		// Use context.Background() for background tasks
-		s.notificationSvc.CreateNotification(context.Background(), params)
+		s.notifSvc.CreateNotification(context.Background(), params)
 		log.Printf("INFO: Triggered notification for new comment %d", savedComment.ID)
 	}()
 
@@ -287,6 +303,23 @@ func (s *Service) TogglePostLike(ctx context.Context, userID string, postID int6
 		newCount, err = s.repo.RemoveLikeFromPost(ctx, userID, postID)
 	} else {
 		newCount, err = s.repo.AddLikeToPost(ctx, userID, postID)
+		// After success, send notification to the post author
+		post, err := s.repo.FindPostByID(ctx, postID)
+		if err != nil {
+			log.Printf("service.TogglePostLike.FindPost: %w", err)
+		}
+		go func() {
+			params := models.CreateNotificationParams{
+				RecipientUserID: post.UserID,
+				ActorUserID:     userID,
+				Type:            models.NotificationTypeForumPostLiked,
+				EntityType:      "forum_post",
+				EntityID:        postID,
+			}
+			// Use context.Background() for background tasks
+			s.notifSvc.CreateNotification(context.Background(), params)
+			log.Printf("INFO: Triggered notification for new like of forum post %d", postID)
+		}()
 	}
 	if err != nil {
 		return nil, err
@@ -327,6 +360,23 @@ func (s *Service) ToggleCommentLike(ctx context.Context, userID string, commentI
 		newCount, err = s.repo.RemoveLikeFromComment(ctx, userID, commentID)
 	} else {
 		newCount, err = s.repo.AddLikeToComment(ctx, userID, commentID)
+		// After success, send notification to the post author
+		comment, err := s.repo.FindCommentByID(ctx, commentID)
+		if err != nil {
+			log.Printf("service.ToggleCommentLike.FindComment: %w", err)
+		}
+		go func() {
+			params := models.CreateNotificationParams{
+				RecipientUserID: comment.UserID,
+				ActorUserID:     userID,
+				Type:            models.NotificationTypeForumCommentLiked,
+				EntityType:      "forum_comment",
+				EntityID:        commentID,
+			}
+			// Use context.Background() for background tasks
+			s.notifSvc.CreateNotification(context.Background(), params)
+			log.Printf("INFO: Triggered notification for new like of forum comment %d", commentID)
+		}()
 	}
 	if err != nil {
 		return nil, err

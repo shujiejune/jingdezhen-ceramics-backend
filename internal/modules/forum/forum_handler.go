@@ -117,6 +117,21 @@ func (h *Handler) GetCategories(c echo.Context) error {
 
 // --- Protected Handlers ---
 
+func (h *Handler) GetSavedForumPosts(c echo.Context) error {
+	userID, err := utils.GetUserIDFromContext(c)
+	if err != nil {
+		return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: err.Error()})
+	}
+
+	page, limit := utils.GetPageLimit(c)
+	savedForumPosts, total, err := h.service.GetSavedForumPosts(c.Request().Context(), userID, page, limit)
+	if err != nil {
+		c.Logger().Error("Handler.GetSavedForumPosts: ", err)
+		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to retrieve saved forum posts"})
+	}
+	return c.JSON(http.StatusOK, models.NewPaginatedResponse(savedForumPosts, page, limit, total))
+}
+
 // CreatePost handles creating a new forum post.
 func (h *Handler) CreatePost(c echo.Context) error {
 	userID, err := utils.GetUserIDFromContext(c)

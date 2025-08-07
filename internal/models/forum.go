@@ -64,6 +64,19 @@ type PostFilters struct {
 	CategoryID int64
 }
 
+// SavedPostEntry is a specific view model for the "My Saved Posts" page.
+// It combines a summary of a post with the timestamp of when the user saved it.
+// It's kept flat (not nesting a Post struct) to make database scanning with pgx much simpler.
+type SavedPostEntry struct {
+	ID             int64      `json:"id" db:"id"`
+	Title          string     `json:"title" db:"title"`
+	CategoryID     *int64     `json:"category_id" db:"category_id"`
+	CategoryName   *string    `json:"category_name" db:"category_name"`
+	AuthorNickname string     `json:"author_nickname" db:"author_nickname"`
+	LastActivityAt *time.Time `json:"last_activity_at" db:"last_activity_at"`
+	SavedAt        time.Time  `json:"saved_at" db:"saved_at"`
+}
+
 // CreatePostRequest defines the body for creating a new post.
 type CreatePostRequest struct {
 	Title      string   `json:"title" validate:"required,min=3,max=255"`
