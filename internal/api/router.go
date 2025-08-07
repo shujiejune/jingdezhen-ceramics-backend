@@ -7,6 +7,8 @@ import (
 	"jingdezhen-ceramics-backend/internal/modules/engage"
 	"jingdezhen-ceramics-backend/internal/modules/forum"
 	"jingdezhen-ceramics-backend/internal/modules/gallery"
+	"jingdezhen-ceramics-backend/internal/modules/note"
+	"jingdezhen-ceramics-backend/internal/modules/notification"
 	"jingdezhen-ceramics-backend/internal/modules/portfolio"
 	"jingdezhen-ceramics-backend/internal/modules/user"
 	"net/http"
@@ -18,6 +20,8 @@ import (
 func SetupRoutes(
 	e *echo.Echo, jwtSecretKey string,
 	userHandler *user.Handler,
+	notifHandler *notification.Handler,
+	noteHandler *note.Handler,
 	csHandler *ceramicstory.Handler,
 	galleryHandler *gallery.Handler,
 	engageHandler *engage.Handler,
@@ -52,18 +56,31 @@ func SetupRoutes(
 	{
 		profileGroup.GET("", userHandler.GetProfile)
 		profileGroup.PUT("", userHandler.UpdateProfile)
-		profileGroup.GET("/courses", userHandler.GetEnrolledCourses)
-		profileGroup.GET("/notifications", userHandler.GetNotifications)
-		profileGroup.GET("/notes", userHandler.GetUserNotes)
-		profileGroup.POST("/notes", userHandler.CreateUserNote)
-		profileGroup.PUT("/notes/:note_id", userHandler.UpdateUserNote)
-		profileGroup.DELETE("/notes/:note_id", userHandler.DeleteUserNote)
-		profileGroup.POST("notes/:note_id/links", userHandler.AddLinkToNote)
-		profileGroup.DELETE("notes/:note_id/links/:link_id", userHandler.RemoveLinkFromNote)
-		profileGroup.GET("/notifications", userHandler.GetNotifications)
-		profileGroup.GET("/favorite-artworks", userHandler.GetFavoriteArtworks)
-		profileGroup.GET("/saved-posts", userHandler.GetSavedForumPosts)
 		// ... other user-specific routes like badges, subscriptions
+	}
+
+	/* --- Note Module (Protected) --- */
+	noteGroup := e.Group("/notes")
+	noteGroup.Use(middleware.JWTMAuth(jwtSecretKey))
+	{
+		noteGroup.GET("", noteHandler.GetUserNotes)
+		noteGroup.GET("/:note_id", noteHandler.GetUserNoteByID)
+		noteGroup.POST("", noteHandler.CreateUserNote)
+		noteGroup.PUT("/:note_id", noteHandler.UpdateUserNote)
+		noteGroup.DELETE("/:note_id", noteHandler.DeleteUserNote)
+		noteGroup.POST("/:note_id/links", noteHandler.AddLinkToNote)
+		noteGroup.DELETE("/:note_id/links/:link_id", noteHandler.RemoveLinkFromNote)
+		noteGroup.POST("/:note_id/publish-to-forum", noteHandler.PublishNoteToForum)
+	}
+
+	/* --- Notification Module (Protected) --- */
+	notifGroup := e.Group("/notifications")
+	notifGroup.Use(middleware.JWTMAuth(jwtSecretKey))
+	{
+		notifGroup.GET("", notifHandler.GetNotifications)
+		notifGroup.GET("/unread-count", notifHandler.GetUnreadNotificationCount)
+		notifGroup.POST("/mark-all-read", notifHandler.MarkAllAsRead)
+		notifGroup.POST("/:notification_id/mark-read", notifHandler.MarkAsRead)
 	}
 
 	/* --- Ceramic Story (Public) --- */
@@ -86,6 +103,7 @@ func SetupRoutes(
 		authGalleryGroup := gGroup.Group("")
 		authGalleryGroup.Use(middleware.JWTMAuth(jwtSecretKey))
 		{
+			authGalleryGroup.GET("/favorites", galleryHandler.GetFavoriteArtworks)
 			authGalleryGroup.POST("/artworks/:artwork_id/favorite", galleryHandler.MarkAsFavorite)
 			authGalleryGroup.DELETE("/artworks/:artwork_id/favorite", galleryHandler.UnmarkAsFavorite)
 			authGalleryGroup.POST("/artworks/:artwork_id/notes", galleryHandler.AddNoteToArtwork)
@@ -113,6 +131,7 @@ func SetupRoutes(
 		authCourseGroup.Use(middleware.NormalUserRequired())
 		{
 			authCourseGroup.POST("/:course_id/enroll", courseHandler.EnrollCourse)
+			authCourseGroup.GET("/enrolled", courseHandler.GetEnrolledCourses)
 			authCourseGroup.GET("/:course_id/chapters/:chapter_id/full", courseHandler.GetFullChapterContentForEnrolled)
 			authCourseGroup.POST("/:course_id/chapters/:chapter_id/blocks/:block_id/complete", courseHandler.MarkContentBlockComplete)
 			authCourseGroup.POST("/:course_id/chapters/:chapter_id/blocks/:block_id/video-progress", courseHandler.UpdateVideoProgress)
@@ -136,6 +155,7 @@ func SetupRoutes(
 		authForumGroup := fGroup.Group("")
 		authForumGroup.Use(middleware.JWTMAuth(jwtSecretKey))
 		{
+			authForumGroup.GET("/saved-posts", forumHandler.GetSavedForumPosts)
 			authForumGroup.POST("/posts", forumHandler.CreatePost)
 			authForumGroup.PUT("/posts/:post_id", forumHandler.UpdatePost)    // Check ownership
 			authForumGroup.DELETE("/posts/:post_id", forumHandler.DeletePost) // Check ownership or admin
@@ -152,7 +172,7 @@ func SetupRoutes(
 	/* --- Portfolio (Public read, Protected kudos) --- */
 	pGroup := e.Group("/portfolio")
 	{
-		pGroup.GET("", portfolioHandler.GetWorks) // Params: ?page=1&category=...&sort=kudos
+		pGroup.GET("", portfolioHandler.GetWorks) // Params: ?page=1&category=...&sort=upvotes
 		pGroup.GET("/:work_id", portfolioHandler.GetWorkByID)
 
 		// Protected actions

@@ -17,9 +17,7 @@ type WebSocketService interface {
 // Service provides business logic for notifications.
 type ServiceInterface interface {
 	CreateNotification(ctx context.Context, params models.CreateNotificationParams) (*models.Notification, error)
-	// GetNotificationsForUser should ideally return the composed notifications with ActorUser populated.
-	// This composition logic lives here in the service.
-	GetNotificationsForUser(ctx context.Context, userID string, page, pageSize int) ([]models.Notification, int64, error)
+	GetNotificationsForUser(ctx context.Context, userID string, page, limit int) ([]models.Notification, int, error)
 	GetUnreadNotificationCount(ctx context.Context, userID string) (int64, error)
 	MarkNotificationAsRead(ctx context.Context, notificationID int64, userID string) error
 	MarkAllNotificationsAsRead(ctx context.Context, userID string) error
@@ -33,7 +31,7 @@ type Service struct {
 
 // NewService creates a new notification service.
 func NewService(repo Repository, userRepo user.Repository, wsService WebSocketService) ServiceInterface {
-	return &service{
+	return &Service{
 		repo:             repo,
 		userRepo:         userRepo,
 		webSocketService: wsService,
@@ -96,7 +94,7 @@ func mapKeysToSlice(m map[string]struct{}) []string {
 }
 
 // GetNotificationsForUser retrieves notifications and composes them with actor details.
-func (s *Service) GetNotificationsForUser(ctx context.Context, userID string, page, limit int) ([]models.Notification, int64, error) {
+func (s *Service) GetNotificationsForUser(ctx context.Context, userID string, page, limit int) ([]models.Notification, int, error) {
 	if page < 1 {
 		page = 1
 	}

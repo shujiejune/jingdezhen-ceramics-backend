@@ -14,7 +14,7 @@ import (
 type RepositoryInterface interface {
 	Create(ctx context.Context, notification *models.Notification) error
 	GetByUserID(ctx context.Context, userID string, limit, offset int) ([]models.Notification, error)
-	GetTotalCountByUserID(ctx context.Context, userID string) (int64, error)
+	GetTotalCountByUserID(ctx context.Context, userID string) (int, error)
 	MarkAsRead(ctx context.Context, notificationID int64, userID string) (bool, error)
 	MarkAllAsRead(ctx context.Context, userID string) (int64, error)
 	GetUnreadCount(ctx context.Context, userID string) (int64, error)
@@ -85,8 +85,8 @@ func (r *Repository) GetByUserID(ctx context.Context, userID string, limit, offs
 }
 
 // GetTotalCountByUserID gets the total number of notifications for a user (for pagination).
-func (r *Repository) GetTotalCountByUserID(ctx context.Context, userID string) (int64, error) {
-	var total int64
+func (r *Repository) GetTotalCountByUserID(ctx context.Context, userID string) (int, error) {
+	var total int
 	query := `SELECT COUNT(*) FROM notifications WHERE recipient_user_id = $1`
 	err := r.executor.QueryRow(ctx, query, userID).Scan(&total)
 	return total, err
