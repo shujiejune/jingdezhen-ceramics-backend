@@ -16,6 +16,7 @@ type ServiceInterface interface {
 	GetTags(ctx context.Context) ([]models.Tag, error)
 
 	GetSavedForumPosts(ctx context.Context, userID string, page, limit int) ([]models.SavedPostEntry, int, error)
+	IsValidCategory(ctx context.Context, categoryID int64) (bool, error)
 
 	CreatePost(ctx context.Context, userID string, data models.CreatePostRequest) (*models.ForumPost, error)
 	UpdatePost(ctx context.Context, userID string, postID int64, data models.UpdatePostRequest) (*models.ForumPost, error)
@@ -181,6 +182,11 @@ func (s *Service) GetSavedForumPosts(ctx context.Context, userID string, page, l
 		return nil, 0, fmt.Errorf("service.GetSavedForumPosts: %w", err)
 	}
 	return savedForumPosts, total, nil
+}
+
+// IsValidCategory checks if a forum category with the given ID exists.
+func (s *Service) IsValidCategory(ctx context.Context, categoryID int64) (bool, error) {
+	return s.repo.CategoryExists(ctx, categoryID)
 }
 
 // CreatePost handles the business logic for creating a new post.

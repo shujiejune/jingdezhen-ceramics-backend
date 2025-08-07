@@ -16,6 +16,8 @@ import (
 	"jingdezhen-ceramics-backend/internal/modules/engage"
 	"jingdezhen-ceramics-backend/internal/modules/forum"
 	"jingdezhen-ceramics-backend/internal/modules/gallery"
+	"jingdezhen-ceramics-backend/internal/modules/note"
+	"jingdezhen-ceramics-backend/internal/modules/notification"
 	"jingdezhen-ceramics-backend/internal/modules/portfolio"
 	"jingdezhen-ceramics-backend/internal/modules/user"
 	"jingdezhen-ceramics-backend/pkg/email"

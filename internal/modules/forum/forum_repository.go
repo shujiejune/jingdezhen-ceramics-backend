@@ -44,6 +44,7 @@ type RepositoryInterface interface {
 	DeleteComment(ctx context.Context, commentID int64) error
 
 	GetSavedForumPosts(ctx context.Context, userID string, page, limit int) ([]models.SavedPostEntry, int, error)
+	CategoryExists(ctx context.Context, categoryID int64) (bool, error)
 	IsPostLikedByUser(ctx context.Context, userID string, postID int64) (bool, error)
 	IsPostSavedByUser(ctx context.Context, userID string, postID int64) (bool, error)
 	IsCommentLikedByUser(ctx context.Context, userID string, commentID int64) (bool, error)
@@ -697,6 +698,14 @@ func (r *Repository) GetSavedForumPosts(ctx context.Context, userID string, page
 	}
 
 	return savedPosts, total, nil
+}
+
+// CategoryExists checks for the existence of a forum category by its ID.
+func (r *Repository) CategoryExists(ctx context.Context, categoryID int64) (bool, error) {
+	var exists bool
+	query := `SELECT EXISTS(SELECT 1 FROM forum_categories WHERE id = $1)`
+	err := r.executor.QueryRow(ctx, query, categoryID).Scan(&exists)
+	return exists, err
 }
 
 func (r *Repository) IsPostLikedByUser(ctx context.Context, userID string, postID int64) (bool, error) {
