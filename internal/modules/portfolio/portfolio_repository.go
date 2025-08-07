@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"strings"
+	"time"
 )
 
 // DBExecutor defines an interface for executing SQL queries.
@@ -17,6 +18,7 @@ type DBExecutor interface {
 	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	CopyFrom(ctx context.Context, tableName pgx.Identifier, columnNames []string, rowSrc pgx.CopyFromSource) (int64, error)
 }
 
 // RepositoryInterface defines the methods for interacting with portfolio storage.
@@ -153,7 +155,7 @@ func (r *Repository) GetWorkCountByUserID(ctx context.Context, userID string) (i
 
 // GetWorkImages retrieves all images for a given portfolio work.
 func (r *Repository) GetWorkImages(ctx context.Context, workID int64) ([]models.PortfolioWorkImage, error) {
-	query := `SELECT id, image_url, is_thumbnail, caption FROM portfolio_work_images WHERE portfolio_work_id = $1 ORDER BY id`
+	query := `SELECT id, image_url, is_thumbnail, caption, display_order FROM portfolio_work_images WHERE portfolio_work_id = $1 ORDER BY id`
 	rows, err := r.executor.Query(ctx, query, workID)
 	if err != nil {
 		return nil, fmt.Errorf("repository.GetWorkImages.Query: %w", err)
@@ -242,12 +244,12 @@ func (r *Repository) CreateWork(ctx context.Context, userID string, data models.
 		imageRows := make([][]any, len(data.ImageURLs))
 		for i, url := range data.ImageURLs {
 			isThumbnail := data.ThumbnailURLIndex != nil && *data.ThumbnailURLIndex == i
-			imageRows[i] = []any{workID, url, isThumbnail, ""} // caption is empty on create
+			imageRows[i] = []any{workID, url, isThumbnail, "", i} // caption is empty on create
 		}
 		_, err := repoTx.executor.CopyFrom(
 			ctx,
 			pgx.Identifier{"portfolio_work_images"},
-			[]string{"portfolio_work_id", "image_url", "is_thumbnail", "caption"},
+			[]string{"portfolio_work_id", "image_url", "is_thumbnail", "caption", "display_order"},
 			pgx.CopyFromRows(imageRows),
 		)
 		if err != nil {
@@ -274,12 +276,65 @@ func (r *Repository) CreateWork(ctx context.Context, userID string, data models.
 func (r *Repository) UpdateWork(ctx context.Context, workID int64, data models.UpdateWorkRequest) (*models.PortfolioWork, error) {
 	// This would also be a transactional operation.
 	// 1. Begin Tx
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	repoTx := r.WithTx(tx)
+
 	// 2. Update the portfolio_works table with new title/description
-	// 3. Delete existing images and tags associations
-	// 4. Insert new images and link new tags (similar to CreateWork)
+	updateQuery := `
+		UPDATE portfolio_works
+		SET title = COALESCE($1, title), description = COALESCE($2, description), updated_at = $3
+		WHERE id = $4
+	`
+	if _, err := repoTx.executor.Exec(ctx, updateQuery, data.Title, data.Description, time.Now(), workID); err != nil {
+		return nil, fmt.Errorf("repository.UpdateWork.UpdateDetails: %w", err)
+	}
+
+	// 3. Replace images: Delete old ones, then insert the new set.
+	if data.Images != nil {
+		if _, err := repoTx.executor.Exec(ctx, "DELETE FROM portfolio_work_images WHERE portfolio_work_id = $1", workID); err != nil {
+			return nil, fmt.Errorf("repository.UpdateWork.DeleteImages: %w", err)
+		}
+		if len(data.Images) > 0 {
+			imageRows := make([][]any, len(data.Images))
+			for i, img := range data.Images {
+				imageRows[i] = []any{workID, img.ImageURL, img.IsThumbnail, img.Caption, i}
+			}
+			_, err := repoTx.executor.CopyFrom(
+				ctx,
+				pgx.Identifier{"portfolio_work_images"},
+				[]string{"portfolio_work_id", "image_url", "is_thumbnail", "caption", "display_order"},
+				pgx.CopyFromRows(imageRows),
+			)
+			if err != nil {
+				return nil, fmt.Errorf("repository.UpdateWork.CopyFromImages: %w", err)
+			}
+		}
+	}
+
+	// 4. Replace tags: Delete old associations, then link the new set.
+	if data.Tags != nil {
+		if _, err := repoTx.executor.Exec(ctx, "DELETE FROM portfolio_work_tags WHERE portfolio_work_id = $1", workID); err != nil {
+			return nil, fmt.Errorf("repository.UpdateWork.DeleteTags: %w", err)
+		}
+		if len(data.Tags) > 0 {
+			if err := repoTx.linkTagsToWork(ctx, workID, data.Tags); err != nil {
+				return nil, fmt.Errorf("repository.UpdateWork.LinkTags: %w", err)
+			}
+		}
+	}
+
 	// 5. Commit Tx
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+
 	// 6. Return the updated work
-	return nil, errors.New("update work not implemented")
+	return repoTx.FindWorkByID(ctx, workID)
 }
 
 // DeleteWork deletes a portfolio work. The ON DELETE CASCADE in the DB handles related data.

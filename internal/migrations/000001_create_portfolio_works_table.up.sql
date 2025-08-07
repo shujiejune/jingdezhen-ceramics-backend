@@ -8,3 +8,4 @@ CREATE TABLE portfolio_works (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+CREATE INDEX idx_portfolio_works_user_id ON portfolio_works(user_id);

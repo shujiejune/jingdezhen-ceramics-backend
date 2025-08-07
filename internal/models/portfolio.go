@@ -4,10 +4,11 @@ import "time"
 
 // PortfolioWorkImage represents a single image for a portfolio work.
 type PortfolioWorkImage struct {
-	ID          int64  `json:"id" db:"id"`
-	ImageURL    string `json:"image_url" db:"image_url"`
-	IsThumbnail bool   `json:"is_thumbnail" db:"is_thumbnail"`
-	Caption     string `json:"caption,omitempty" db:"caption"`
+	ID           int64  `json:"id" db:"id"`
+	ImageURL     string `json:"image_url" db:"image_url"`
+	IsThumbnail  bool   `json:"is_thumbnail" db:"is_thumbnail"`
+	Caption      string `json:"caption,omitempty" db:"caption"`
+	DisplayOrder int    `json:"display_order" db:"display_order"`
 }
 
 // PortfolioWork represents a single creative work submitted by a student.
