@@ -101,6 +101,21 @@ func (h *Handler) GetGalleryCategories(c echo.Context) error {
 
 // --- Protected Handlers ---
 
+func (h *Handler) GetFavoriteArtworks(c echo.Context) error {
+	userID, err := utils.GetUserIDFromContext(c)
+	if err != nil {
+		return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: err.Error()})
+	}
+
+	page, limit := utils.GetPageLimit(c)
+	favArtworks, total, err := h.service.GetFavArtworks(c.Request().Context(), userID, page, limit)
+	if err != nil {
+		c.Logger().Error("Handler.GetFavArtworks: ", err)
+		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to retrieve favorite artworks"})
+	}
+	return c.JSON(http.StatusOK, models.NewPaginatedResponse(favArtworks, page, limit, total))
+}
+
 func (h *Handler) MarkAsFavorite(c echo.Context) error {
 	userID, err := utils.GetUserIDFromContext(c)
 	if err != nil {

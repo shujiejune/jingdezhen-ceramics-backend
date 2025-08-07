@@ -8,6 +8,7 @@ import (
 	"jingdezhen-ceramics-backend/internal/models"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -29,6 +30,7 @@ type RepositoryInterface interface {
 	FindAllArtists(ctx context.Context, page, limit int) ([]models.Artist, int, error)
 	FindArtistByID(ctx context.Context, artistID int64) (*models.Artist, error)
 	FindAllCategories(ctx context.Context) ([]string, error)
+	GetFavArtworks(ctx context.Context, userID string, page, limit int) ([]models.UserFavArtworkEntry, int, error)
 	CheckFavorites(ctx context.Context, userID string, artworkIDs []int64) (map[int64]bool, error)
 	AddFavorite(ctx context.Context, userID string, artworkID int64) error
 	RemoveFavorite(ctx context.Context, userID string, artworkID int64) error
@@ -383,6 +385,86 @@ func (r *Repository) FindAllCategories(ctx context.Context) ([]string, error) {
 		categories = append(categories, cat)
 	}
 	return categories, nil
+}
+
+func (r *Repository) GetFavArtworks(ctx context.Context, userID string, page, limit int) ([]models.UserFavArtworkEntry, int, error) {
+	offset := (page - 1) * limit
+
+	// 1. Get artwork_ids and total count of favorites
+	var artworkIDs []int64
+	var favoritedAtTimes []time.Time
+
+	queryFavs := `SELECT ufa.artwork_id, ufa.created_at
+	          FROM user_favorite_artworks ufa WHERE ufa.user_id = $1 ORDER BY ufa.created_at DESC LIMIT $2 OFFSET $3`
+	rows, err := r.db.Query(ctx, queryFavs, userID, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("repository.GetFavArtworks.QueryFavs: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var artworkID int64
+		var favTime time.Time
+
+		if err := rows.Scan(&artworkID, &favTime); err != nil {
+			return nil, 0, fmt.Errorf("repository.GetFavArtworks.ScanFavIDs: %w", err)
+		}
+		artworkIDs = append(artworkIDs, artworkID)
+		favoritedAtTimes = append(favoritedAtTimes, favTime)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("repository.GetFavArtworks.RowsErr: %w", err)
+	}
+
+	var total int
+	err = r.db.QueryRow(ctx, "SELECT COUNT(*) FROM user_favorite_artworks WHERE user_id = $1", userID).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("repository.GetFavArtworks.Count: %w", err)
+	}
+
+	// 2. Fetch artwork details for the retrieved IDs
+	artworksQuery := `
+        SELECT
+            a.id, a.title, a.thumbnail_url,
+            ar.name as artist_name
+        FROM artworks a
+        LEFT JOIN artists ar ON a.artist_id = ar.id
+        WHERE a.id = ANY($1::bigint[])` // Use ANY for array of IDs
+
+	artworkRows, err := r.db.Query(ctx, artworksQuery, artworkIDs)
+	if err != nil {
+		return nil, total, fmt.Errorf("repository.GetFavArtworks.QueryArtworks: %w", err)
+	}
+	defer artworkRows.Close()
+
+	favArtworksMap := make(map[int64]models.UserFavArtworkEntry)
+	for artworkRows.Next() {
+		var art models.UserFavArtworkEntry
+		var artistName sql.NullString // Handle potentially NULL artist name
+		if err := artworkRows.Scan(&art.Artwork.ID, &art.Artwork.Title, &art.Artwork.ThumbnailURL, &artistName); err != nil {
+			return nil, total, fmt.Errorf("repository.GetFavArtworks.ScanArtworks: %w", err)
+		}
+		if artistName.Valid {
+			art.Artwork.ArtistName = &artistName.String
+		}
+		// You might want to add the 'favorited_at' time to the Artwork struct for display
+		// For now, just populating the map.
+		favArtworksMap[art.Artwork.ID] = art
+	}
+	if err := artworkRows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("repository.GetFavArtworks.ArtworkRowsErr: %w", err)
+	}
+
+	// Order results according to artworkIDs (which were ordered by favorite time)
+	orderedFavArtworks := make([]models.UserFavArtworkEntry, 0, len(artworkIDs))
+	for i, id := range artworkIDs {
+		if art, ok := favArtworksMap[id]; ok {
+			art.FavoritedAt = favoritedAtTimes[i]
+			orderedFavArtworks = append(orderedFavArtworks, art)
+		}
+	}
+
+	return orderedFavArtworks, total, nil
 }
 
 func (r *Repository) CheckFavorites(ctx context.Context, userID string, artworkIDs []int64) (map[int64]bool, error) {

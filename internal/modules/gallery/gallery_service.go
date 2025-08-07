@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"jingdezhen-ceramics-backend/internal/models"
-	"jingdezhen-ceramics-backend/internal/modules/user" // For creating notes
+	"jingdezhen-ceramics-backend/internal/modules/user"
 	"log"
 )
 
@@ -14,6 +14,7 @@ type ServiceInterface interface {
 	GetArtists(ctx context.Context, page, limit int) ([]models.Artist, int, error)
 	GetArtistByID(ctx context.Context, artistID int64) (*models.Artist, error)
 	GetGalleryCategories(ctx context.Context) ([]string, error)
+	GetFavArtworks(ctx context.Context, userID string, page, limit int) ([]models.UserFavArtworkEntry, int, error)
 	MarkAsFavorite(ctx context.Context, userID string, artworkID int64) error
 	UnmarkAsFavorite(ctx context.Context, userID string, artworkID int64) error
 	AddNoteToArtwork(ctx context.Context, userID string, artworkID int64, data models.AddNoteToEntityRequest) (*models.UserNote, error)
@@ -93,6 +94,20 @@ func (s *Service) GetArtistByID(ctx context.Context, artistID int64) (*models.Ar
 }
 func (s *Service) GetGalleryCategories(ctx context.Context) ([]string, error) {
 	return s.repo.FindAllCategories(ctx)
+}
+
+func (s *Service) GetFavArtworks(ctx context.Context, userID string, page, limit int) ([]models.UserFavArtworkEntry, int, error) {
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 || limit > 100 {
+		limit = 20
+	} // Default/max limit
+	favArtworks, total, err := s.repo.GetFavArtworks(ctx, userID, page, limit)
+	if err != nil {
+		return nil, 0, fmt.Errorf("service.GetFavArtworks: %w", err)
+	}
+	return favArtworks, total, nil
 }
 
 func (s *Service) MarkAsFavorite(ctx context.Context, userID string, artworkID int64) error {
