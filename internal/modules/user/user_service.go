@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"jingdezhen-ceramics-backend/internal/models"
-	"jingdezhen-ceramics-backend/internal/modules/forum"
 	emailSvc "jingdezhen-ceramics-backend/pkg/email"
 	"jingdezhen-ceramics-backend/pkg/utils"
 	"log"
@@ -36,27 +35,6 @@ type ServiceInterface interface {
 	UpdateUserProfile(ctx context.Context, userID string, data models.UserUpdateData) (*models.User, error)
 	HandleContactSubmission(ctx context.Context, data models.ContactFormData) error
 
-	GetEnrolledCourses(ctx context.Context, userID string) ([]models.EnrolledCourseResponse, error)
-
-	// User Notes
-	ListUserNotes(ctx context.Context, userID string, page, limit int) ([]models.UserNote, int, error)
-	GetUserNoteDetails(ctx context.Context, userID string, noteID int) (*models.UserNote, error)
-	CreateUserNote(ctx context.Context, userID string, data models.CreateUserNoteData) (*models.UserNote, error)
-	UpdateUserNote(ctx context.Context, userID string, noteID int, data models.UpdateUserNoteData) (*models.UserNote, error)
-	DeleteUserNote(ctx context.Context, userID string, noteID int) error
-	AddLinkToNote(ctx context.Context, noteID int, data models.AddLinkToNoteData) (*models.UserNoteLink, error)
-	RemoveLinkFromNote(ctx context.Context, noteID int, linkID int) error
-	PublishNoteToForum(ctx context.Context, userID string, noteID int, publishDetails models.ForumPostPublishDetails) (*models.ForumPost, error)
-
-	// Notifications
-	GetNotifications(ctx context.Context, userID string, page, limit int) ([]models.Notification, int, error)
-
-	// Favorite Artworks
-	GetFavArtworks(ctx context.Context, userID string, page, limit int) ([]models.UserFavArtworkEntry, int, error)
-
-	// Saved Forum Posts
-	GetSavedForumPosts(ctx context.Context, userID string, page, limit int) ([]models.UserSavedPostEntry, int, error)
-
 	// Admin
 	AdminListUsers(ctx context.Context, page, limit int) ([]models.User, int, error)
 	AdminUpdateUserRole(ctx context.Context, targetUserID string, newRole string) error
@@ -64,9 +42,6 @@ type ServiceInterface interface {
 
 type Service struct {
 	userRepo RepositoryInterface
-	// For simplicity, userNote specific methods are on RepositoryInterface for now.
-	// In a larger system, userNoteRepo might be a separate RepositoryInterface.
-	forumSvc          forum.ServiceInterface    // Injected for publishing notes
 	emailer           emailSvc.ServiceInterface // For sending emails
 	templateManager   *emailSvc.TemplateManager
 	jwtSecret         string
@@ -77,7 +52,6 @@ type Service struct {
 
 func NewService(
 	userRepo RepositoryInterface,
-	forumSvc forum.ServiceInterface,
 	emailer emailSvc.ServiceInterface,
 	tm *emailSvc.TemplateManager,
 	JWTSecretFromConfig string,
@@ -87,7 +61,6 @@ func NewService(
 ) ServiceInterface {
 	return &Service{
 		userRepo:          userRepo,
-		forumSvc:          forumSvc,
 		emailer:           emailer,
 		templateManager:   tm,
 		jwtSecret:         JWTSecretFromConfig,
@@ -502,198 +475,6 @@ func (s *Service) HandleContactSubmission(ctx context.Context, data models.Conta
 	log.Printf("SIMULATED: Email sent to %s, Subject: %s", s.adminEmail, emailSubject)
 
 	return nil // Simulate success
-}
-
-func (s *Service) GetEnrolledCourses(ctx context.Context, userID string) ([]models.EnrolledCourseResponse, error) {
-	courses, err := s.userRepo.FindEnrolledCoursesByUserID(ctx, userID)
-	if err != nil {
-		// No complex business logic here for now, just pass the result through.
-		// This layer exists to add such logic later if needed.
-		return nil, fmt.Errorf("service.GetEnrolledCourses: %w", err)
-	}
-	return courses, nil
-}
-
-// --- User Notes ---
-func (s *Service) ListUserNotes(ctx context.Context, userID string, page, limit int) ([]models.UserNote, int, error) {
-	if page < 1 {
-		page = 1
-	}
-	if limit < 1 || limit > 100 {
-		limit = 20
-	} // Default/max limit
-	notes, total, err := s.userRepo.ListUserNotes(ctx, userID, page, limit)
-	if err != nil {
-		return nil, 0, fmt.Errorf("service.ListUserNotes: %w", err)
-	}
-	return notes, total, nil
-}
-
-func (s *Service) GetUserNoteDetails(ctx context.Context, userID string, noteID int) (*models.UserNote, error) {
-	note, err := s.userRepo.GetUserNoteByID(ctx, noteID, userID) // Repo checks ownership
-	if err != nil {
-		return nil, fmt.Errorf("service.GetUserNoteDetails: %w", err)
-	}
-	links, err := s.userRepo.GetLinksForNote(ctx, noteID)
-	if err != nil {
-		log.Printf("Failed to get links for note %d", noteID)
-		return note, models.ErrNotFound
-	}
-	note.Links = links
-	return note, nil
-}
-
-func (s *Service) CreateUserNote(ctx context.Context, userID string, data models.CreateUserNoteData) (*models.UserNote, error) {
-	// Add business logic: e.g., check if user can create notes for this entity_type/entity_id
-	note, err := s.userRepo.CreateUserNote(ctx, userID, data)
-	if err != nil {
-		return nil, fmt.Errorf("service.CreateUserNote: %w", err)
-	}
-	return note, nil
-}
-
-func (s *Service) UpdateUserNote(ctx context.Context, userID string, noteID int, data models.UpdateUserNoteData) (*models.UserNote, error) {
-	// userRepo.UpdateUserNote already checks ownership by including userID in query
-	note, err := s.userRepo.UpdateUserNote(ctx, noteID, userID, data)
-	if err != nil {
-		return nil, fmt.Errorf("service.UpdateUserNote: %w", err)
-	}
-	return note, nil
-}
-
-func (s *Service) DeleteUserNote(ctx context.Context, userID string, noteID int) error {
-	// userRepo.DeleteUserNote already checks ownership by including userID in query
-	err := s.userRepo.DeleteUserNote(ctx, noteID, userID)
-	if err != nil {
-		return fmt.Errorf("service.DeleteUserNote: %w", err)
-	}
-	return nil
-}
-
-func (s *Service) AddLinkToNote(ctx context.Context, noteID int, data models.AddLinkToNoteData) (*models.UserNoteLink, error) {
-	link, err := s.userRepo.AddLinkToNote(ctx, noteID, data)
-	if err != nil {
-		return nil, fmt.Errorf("service.AddLinkToNote: %w", err)
-	}
-	return link, nil
-}
-
-func (s *Service) RemoveLinkFromNote(ctx context.Context, noteID int, linkID int) error {
-	err := s.userRepo.RemoveLinkFromNote(ctx, noteID, linkID)
-	if err != nil {
-		return fmt.Errorf("service.RemoveLinkFromNote: %w", err)
-	}
-	return nil
-}
-
-func (s *Service) PublishNoteToForum(ctx context.Context, userID string, noteID int, publishDetails models.ForumPostPublishDetails) (*models.ForumPost, error) {
-	// 1. Start a transaction
-	tx, err := s.userRepo.BeginTx(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("service.PublishNoteToForum.BeginTx: %w", err)
-	}
-	// Defer a rollback in case anything goes wrong.
-	// If the function returns with an error, this will execute and cancel the transaction
-	defer tx.Rollback(ctx)
-
-	// 2. Create transaction-scoped repositories
-	userRepoWithTx := s.userRepo.WithTx(tx)
-	forumRepoWithTx := s.forumRepo.WithTx(tx)
-
-	// 3. Perform operations within the transaction
-	// Validate category ID
-	isValidCategory, err := s.forumSvc.IsValidCategory(ctx, publishDetails.CategoryID)
-	if err != nil {
-		// Log error, maybe return a generic server error or a specific "validation failed"
-		return nil, fmt.Errorf("failed to validate category: %w", err)
-	}
-	if !isValidCategory {
-		return nil, models.ErrInvalidForumPostCategoryID
-	}
-
-	// Get the note using transactional user repo
-	note, err := userRepoWithTx.GetUserNoteByID(ctx, noteID, userID)
-	if err != nil {
-		return nil, fmt.Errorf("service.PublishNoteToForum.GetNote: %w", err)
-	}
-	if note.IsPublishedToForum {
-		// Optionally, you could return the existing forum post if note.ForumPostID is not nil
-		return nil, models.ErrConflict
-	}
-
-	// Prepare data for creating forum post
-	createPostData := models.CreateForumPostData{ // Assuming this struct exists in models
-		Title:      publishDetails.Title,
-		Content:    note.Content, // Use content from the note
-		CategoryID: publishDetails.CategoryID,
-		Tags:       publishDetails.Tags,
-		// UserID is handled by forumService.CreatePost based on the authenticated user
-	}
-
-	// Create post usingg transactional forum repo
-	createdPost, err := forumRepoWithTx.CreatePost(ctx, userID, createPostData) // userID passed here is the authenticated user
-	if err != nil {
-		return nil, fmt.Errorf("service.PublishNoteToForum.CreatePost: %w", err)
-	}
-
-	// Mark note as published
-	err = userRepoWithTx.MarkNoteAsPublished(ctx, noteID, createdPost.ID)
-	if err != nil {
-		// Because we are in a transaction, if this fails, the defer tx.Rollback(ctx)
-		// will automatically undo the forum post creation.
-		return nil, fmt.Errorf("service.PublishNoteToForum.MarkNoteAsPublished: %w", err)
-	}
-
-	// --- Step 4: Commit the Transaction ---
-	// If we reach this point, all operations were successful.
-	// We commit the transaction to make all changes permanent.
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("service.PublishNoteToForum.Commit: %w", err)
-	}
-
-	return createdPost, nil
-}
-
-func (s *Service) GetNotifications(ctx context.Context, userID string, page, limit int) ([]models.Notification, int, error) {
-	if page < 1 {
-		page = 1
-	}
-	if limit < 1 || limit > 100 {
-		limit = 20
-	} // Default/max limit
-	notifications, total, err := s.userRepo.GetNotifications(ctx, userID, page, limit)
-	if err != nil {
-		return nil, 0, fmt.Errorf("service.GetNotifications: %w", err)
-	}
-	return notifications, total, nil
-}
-
-func (s *Service) GetFavArtworks(ctx context.Context, userID string, page, limit int) ([]models.UserFavArtworkEntry, int, error) {
-	if page < 1 {
-		page = 1
-	}
-	if limit < 1 || limit > 100 {
-		limit = 20
-	} // Default/max limit
-	favArtworks, total, err := s.userRepo.GetFavArtworks(ctx, userID, page, limit)
-	if err != nil {
-		return nil, 0, fmt.Errorf("service.GetFavArtworks: %w", err)
-	}
-	return favArtworks, total, nil
-}
-
-func (s *Service) GetSavedForumPosts(ctx context.Context, userID string, page, limit int) ([]models.UserSavedPostEntry, int, error) {
-	if page < 1 {
-		page = 1
-	}
-	if limit < 1 || limit > 100 {
-		limit = 20
-	} // Default/max limit
-	savedForumPosts, total, err := s.userRepo.GetSavedForumPosts(ctx, userID, page, limit)
-	if err != nil {
-		return nil, 0, fmt.Errorf("service.GetSavedForumPosts: %w", err)
-	}
-	return savedForumPosts, total, nil
 }
 
 // --- Admin Service Methods ---
