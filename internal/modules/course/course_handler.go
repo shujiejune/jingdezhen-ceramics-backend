@@ -93,6 +93,26 @@ func (h *Handler) EnrollCourse(c echo.Context) error {
 	return c.NoContent(http.StatusOK)
 }
 
+func (h *Handler) GetEnrolledCourses(c echo.Context) error {
+	userID, err := utils.GetUserIDFromContext(c)
+	if err != nil {
+		return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: err.Error()})
+	}
+
+	courses, err := h.service.GetEnrolledCourses(c.Request().Context(), userID)
+	if err != nil {
+		c.Logger().Error("Handler.GetEnrolledCourses: ", err)
+		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to retrieve enrolled courses"})
+	}
+
+	// Return an empty list if the user is not enrolled in any courses, not an error.
+	if len(courses) == 0 {
+		return c.JSON(http.StatusOK, []models.EnrolledCourseResponse{})
+	}
+
+	return c.JSON(http.StatusOK, courses)
+}
+
 // GetFullChapterContentForEnrolled is an explicit endpoint for enrolled users.
 // It's functionally similar to GetChapterContent, but its presence in the protected group
 // makes the API contract clearer. The service logic ensures GetChapterContent is also secure.

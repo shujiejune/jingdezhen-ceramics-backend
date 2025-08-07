@@ -36,6 +36,7 @@ type RepositoryInterface interface {
 
 	CheckUserEnrollment(ctx context.Context, userID string, courseID int64) (bool, error)
 	EnrollUserInCourse(ctx context.Context, userID string, courseID int64) error
+	FindEnrolledCoursesByUserID(ctx context.Context, userID string) ([]models.EnrolledCourseResponse, error)
 
 	UpdateLastVisitedAt(ctx context.Context, userID string, courseID int64) error
 	SavePassiveBlockCompletion(ctx context.Context, userID string, blockID int64) error
@@ -359,6 +360,44 @@ func (r *Repository) EnrollUserInCourse(ctx context.Context, userID string, cour
 		return fmt.Errorf("repository.EnrollUserInCourse: %w", err)
 	}
 	return nil
+}
+
+func (r *Repository) FindEnrolledCoursesByUserID(ctx context.Context, userID string) ([]models.EnrolledCourseResponse, error) {
+	courses := []models.EnrolledCourseResponse{}
+	query := `
+		SELECT
+			c.id,
+			c.title,
+			c.thumbnail_url,
+			ue.last_visited_at
+		FROM courses c
+		JOIN user_enrollments ue ON c.id = ue.course_id
+		WHERE ue.user_id = $1
+		ORDER BY ue.last_visited_at DESC
+	`
+	rows, err := r.executor.Query(ctx, query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("repository.FindEnrolledCoursesByUserID.Query: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var course models.EnrolledCourseResponse
+		if err := rows.Scan(
+			&course.ID,
+			&course.Title,
+			&course.ThumbnailURL,
+			&course.LastVisitedAt,
+		); err != nil {
+			return nil, fmt.Errorf("repository.FindEnrolledCoursesByUserID.Scan: %w", err)
+		}
+		courses = append(courses, course)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("repository.FindEnrolledCoursesByUserID.RowsErr: %w", err)
+	}
+
+	return courses, nil
 }
 
 func (r *Repository) UpdateLastVisitedAt(ctx context.Context, userID string, courseID int64) error {

@@ -17,6 +17,7 @@ type ServiceInterface interface {
 	GetCourseDetails(ctx context.Context, userID string, courseID int64) (*models.Course, error)
 	GetChapterContent(ctx context.Context, userID string, chapterID int64) (*models.CourseChapter, error)
 	EnrollUserInCourse(ctx context.Context, userID string, courseID int64) error
+	GetEnrolledCourses(ctx context.Context, userID string) ([]models.EnrolledCourseResponse, error)
 	MarkContentBlockComplete(ctx context.Context, userID string, courseID, chapterID, blockID int64) error
 	UpdateVideoProgress(ctx context.Context, userID string, blockID int64, data models.UpdateVideoProgressRequest) error
 	AddNoteToChapter(ctx context.Context, userID string, chapterID int64, data models.AddNoteToEntityRequest) (*models.UserNote, error)
@@ -128,6 +129,16 @@ func (s *Service) EnrollUserInCourse(ctx context.Context, userID string, courseI
 		return fmt.Errorf("cannot enroll in non-existent course: %w", err)
 	}
 	return s.repo.EnrollUserInCourse(ctx, userID, courseID)
+}
+
+func (s *Service) GetEnrolledCourses(ctx context.Context, userID string) ([]models.EnrolledCourseResponse, error) {
+	courses, err := s.repo.FindEnrolledCoursesByUserID(ctx, userID)
+	if err != nil {
+		// No complex business logic here for now, just pass the result through.
+		// This layer exists to add such logic later if needed.
+		return nil, fmt.Errorf("service.GetEnrolledCourses: %w", err)
+	}
+	return courses, nil
 }
 
 // MarkContentBlockComplete handles the logic for when a user marks a content block as done.
