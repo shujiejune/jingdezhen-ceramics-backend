@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"jingdezhen-ceramics-backend/internal/models"
-	"jingdezhen-ceramics-backend/internal/modules/user"
+	"jingdezhen-ceramics-backend/internal/modules/note"
 	"log"
 	"math"
 	"strings"
@@ -27,11 +27,11 @@ type ServiceInterface interface {
 
 type Service struct {
 	repo    RepositoryInterface
-	userSvc user.ServiceInterface
+	noteSvc note.ServiceInterface
 }
 
-func NewService(repo RepositoryInterface, userSvc user.ServiceInterface) ServiceInterface {
-	return &Service{repo: repo, userSvc: userSvc}
+func NewService(repo RepositoryInterface, noteSvc note.ServiceInterface) ServiceInterface {
+	return &Service{repo: repo, noteSvc: noteSvc}
 }
 
 func (s *Service) GetAllCourses(ctx context.Context) ([]models.Course, error) {
@@ -236,14 +236,12 @@ func (s *Service) AddNoteToChapter(ctx context.Context, userID string, chapterID
 	}
 
 	noteData := models.CreateUserNoteData{
-		Title:          data.Title,
-		Content:        data.Content,
-		EntityType:     &data.EntityType,
-		EntityIDInt:    data.EntityIDInt,
-		EntityIDUUID:   data.EntityIDUUID,
-		EntityIDString: data.EntityIDString,
+		Title:      data.Title,
+		Content:    data.Content,
+		EntityType: &data.EntityType,
+		EntityID:   data.EntityID,
 	}
-	return s.userSvc.CreateUserNote(ctx, userID, noteData)
+	return s.noteSvc.CreateUserNote(ctx, userID, noteData)
 }
 
 func (s *Service) SubmitAssignment(ctx context.Context, userID string, chapterID int64, assignmentID int64, data models.SubmitAssignmentRequest) (any, error) {
