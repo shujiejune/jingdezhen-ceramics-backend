@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"jingdezhen-ceramics-backend/internal/models"
-	"jingdezhen-ceramics-backend/internal/modules/user"
+	"jingdezhen-ceramics-backend/internal/modules/note"
 	"log"
 )
 
@@ -22,11 +22,11 @@ type ServiceInterface interface {
 
 type Service struct {
 	repo    RepositoryInterface
-	userSvc user.ServiceInterface // Dependency for creating notes
+	noteSvc note.ServiceInterface // Dependency for creating notes
 }
 
-func NewService(repo RepositoryInterface, userSvc user.ServiceInterface) ServiceInterface {
-	return &Service{repo: repo, userSvc: userSvc}
+func NewService(repo RepositoryInterface, noteSvc note.ServiceInterface) ServiceInterface {
+	return &Service{repo: repo, noteSvc: noteSvc}
 }
 
 func (s *Service) GetArtworks(ctx context.Context, userID string, filters models.ArtworkFilters) ([]models.Artwork, int, error) {
@@ -129,13 +129,11 @@ func (s *Service) AddNoteToArtwork(ctx context.Context, userID string, artworkID
 
 	// Delegate note creation to the user service.
 	noteData := models.CreateUserNoteData{
-		Title:          data.Title,
-		Content:        data.Content,
-		EntityType:     &data.EntityType,
-		EntityIDInt:    data.EntityIDInt,
-		EntityIDUUID:   data.EntityIDUUID,
-		EntityIDString: data.EntityIDString,
+		Title:      data.Title,
+		Content:    data.Content,
+		EntityType: &data.EntityType,
+		EntityID:   data.EntityID,
 	}
 
-	return s.userSvc.CreateUserNote(ctx, userID, noteData)
+	return s.noteSvc.CreateUserNote(ctx, userID, noteData)
 }
