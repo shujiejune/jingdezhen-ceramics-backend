@@ -10,7 +10,7 @@ import (
 
 	"jingdezhen-ceramics-backend/internal/models"
 
-	"github.com/gorilla/websocket"
+	"github.com/gofiber/contrib/websocket"
 )
 
 const (
