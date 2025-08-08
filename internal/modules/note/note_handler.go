@@ -1,6 +1,7 @@
 package note
 
 import (
+	"errors"
 	"jingdezhen-ceramics-backend/internal/models"
 	"jingdezhen-ceramics-backend/pkg/utils"
 	"net/http"
@@ -35,6 +36,35 @@ func (h *Handler) GetUserNotes(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to retrieve notes"})
 	}
 	return c.JSON(http.StatusOK, models.NewPaginatedResponse(notes, page, limit, total))
+}
+
+// GetUserNoteByID handles the request to fetch a single user note by its ID.
+func (h *Handler) GetUserNoteByID(c echo.Context) error {
+	// This is a protected route, so a user ID must exist in the context.
+	userID, err := utils.GetUserIDFromContext(c)
+	if err != nil {
+		return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: err.Error()})
+	}
+
+	// Parse the note_id from the URL parameter into an int64.
+	noteID, err := strconv.ParseInt(c.Param("note_id"), 10, 64)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid note ID"})
+	}
+
+	note, err := h.service.GetUserNoteDetails(c.Request().Context(), userID, noteID)
+	if err != nil {
+		// Check if the service returned a "not found" error.
+		if errors.Is(err, models.ErrNotFound) {
+			return c.JSON(http.StatusNotFound, models.ErrorResponse{Message: "Note not found"})
+		}
+		// For all other errors, log them and return a generic server error.
+		c.Logger().Errorf("Handler.GetUserNoteByID: %v", err)
+		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to retrieve note"})
+	}
+
+	// If successful, return the note object with a 200 OK status.
+	return c.JSON(http.StatusOK, note)
 }
 
 func (h *Handler) CreateUserNote(c echo.Context) error {
