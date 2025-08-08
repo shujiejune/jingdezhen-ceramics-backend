@@ -4,11 +4,11 @@ import (
 	"errors"
 	"jingdezhen-ceramics-backend/internal/models"
 	"jingdezhen-ceramics-backend/pkg/utils"
-	"net/http"
+	"log"
 	"strconv"
 
 	"github.com/go-playground/validator/v10"
-	"github.com/labstack/echo/v4"
+	"github.com/gofiber/fiber/v2"
 )
 
 type Handler struct {
@@ -23,193 +23,193 @@ func NewHandler(service ServiceInterface) *Handler {
 	}
 }
 
-func (h *Handler) GetUserNotes(c echo.Context) error {
+func (h *Handler) GetUserNotes(c *fiber.Ctx) error {
 	userID, err := utils.GetUserIDFromContext(c)
 	if err != nil {
-		return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: err.Error()})
+		return c.Status(fiber.StatusUnauthorized).JSON(models.ErrorResponse{Message: err.Error()})
 	}
 
 	page, limit := utils.GetPageLimit(c)
-	notes, total, err := h.service.ListUserNotes(c.Request().Context(), userID, page, limit)
+	notes, total, err := h.service.ListUserNotes(c.Context(), userID, page, limit)
 	if err != nil {
-		c.Logger().Error("Handler.GetUserNotes: ", err)
-		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to retrieve notes"})
+		log.Printf("Handler.GetUserNotes: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Message: "Failed to retrieve notes"})
 	}
-	return c.JSON(http.StatusOK, models.NewPaginatedResponse(notes, page, limit, total))
+	return c.Status(fiber.StatusOK).JSON(models.NewPaginatedResponse(notes, page, limit, total))
 }
 
 // GetUserNoteByID handles the request to fetch a single user note by its ID.
-func (h *Handler) GetUserNoteByID(c echo.Context) error {
+func (h *Handler) GetUserNoteByID(c *fiber.Ctx) error {
 	// This is a protected route, so a user ID must exist in the context.
 	userID, err := utils.GetUserIDFromContext(c)
 	if err != nil {
-		return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: err.Error()})
+		return c.Status(fiber.StatusUnauthorized).JSON(models.ErrorResponse{Message: err.Error()})
 	}
 
 	// Parse the note_id from the URL parameter into an int64.
-	noteID, err := strconv.ParseInt(c.Param("note_id"), 10, 64)
+	noteID, err := strconv.ParseInt(c.Params("note_id"), 10, 64)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid note ID"})
+		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Message: "Invalid note ID"})
 	}
 
-	note, err := h.service.GetUserNoteDetails(c.Request().Context(), userID, noteID)
+	note, err := h.service.GetUserNoteDetails(c.Context(), userID, noteID)
 	if err != nil {
 		// Check if the service returned a "not found" error.
 		if errors.Is(err, models.ErrNotFound) {
-			return c.JSON(http.StatusNotFound, models.ErrorResponse{Message: "Note not found"})
+			return c.Status(fiber.StatusNotFound).JSON(models.ErrorResponse{Message: "Note not found"})
 		}
 		// For all other errors, log them and return a generic server error.
-		c.Logger().Errorf("Handler.GetUserNoteByID: %v", err)
-		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to retrieve note"})
+		log.Printf("Handler.GetUserNoteByID: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Message: "Failed to retrieve note"})
 	}
 
 	// If successful, return the note object with a 200 OK status.
-	return c.JSON(http.StatusOK, note)
+	return c.Status(fiber.StatusOK).JSON(note)
 }
 
-func (h *Handler) CreateUserNote(c echo.Context) error {
+func (h *Handler) CreateUserNote(c *fiber.Ctx) error {
 	userID, err := utils.GetUserIDFromContext(c)
 	if err != nil {
-		return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: err.Error()})
+		return c.Status(fiber.StatusUnauthorized).JSON(models.ErrorResponse{Message: err.Error()})
 	}
 
 	var req models.CreateUserNoteData
-	if err := c.Bind(&req); err != nil {
-		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid request: " + err.Error()})
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Message: "Invalid request: " + err.Error()})
 	}
 	if err := h.validate.Struct(req); err != nil {
-		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Validation failed: " + err.Error()})
+		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Message: "Validation failed: " + err.Error()})
 	}
 
-	note, err := h.service.CreateUserNote(c.Request().Context(), userID, req)
+	note, err := h.service.CreateUserNote(c.Context(), userID, req)
 	if err != nil {
-		c.Logger().Error("Handler.CreateUserNote: ", err)
-		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to create note"})
+		log.Printf("Handler.CreateUserNote: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Message: "Failed to create note"})
 	}
-	return c.JSON(http.StatusCreated, note)
+	return c.Status(fiber.StatusCreated).JSON(note)
 }
 
-func (h *Handler) UpdateUserNote(c echo.Context) error {
+func (h *Handler) UpdateUserNote(c *fiber.Ctx) error {
 	userID, err := utils.GetUserIDFromContext(c)
 	if err != nil {
-		return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: err.Error()})
+		return c.Status(fiber.StatusUnauthorized).JSON(models.ErrorResponse{Message: err.Error()})
 	}
-	noteID, err := strconv.ParseInt(c.Param("note_id"), 10, 64)
+	noteID, err := strconv.ParseInt(c.Params("note_id"), 10, 64)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid note ID"})
+		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Message: "Invalid note ID"})
 	}
 
 	var req models.UpdateUserNoteData
-	if err := c.Bind(&req); err != nil {
-		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid request: " + err.Error()})
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Message: "Invalid request: " + err.Error()})
 	}
 	if err := h.validate.Struct(req); err != nil {
-		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Validation failed: " + err.Error()})
+		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Message: "Validation failed: " + err.Error()})
 	}
 
-	note, err := h.service.UpdateUserNote(c.Request().Context(), userID, noteID, req)
+	note, err := h.service.UpdateUserNote(c.Context(), userID, noteID, req)
 	if err != nil {
-		if err == models.ErrNotFound {
-			return c.JSON(http.StatusNotFound, models.ErrorResponse{Message: "Note not found or not owned by user"})
+		if errors.Is(err, models.ErrNotFound) {
+			return c.Status(fiber.StatusNotFound).JSON(models.ErrorResponse{Message: "Note not found or not owned by user"})
 		}
-		c.Logger().Error("Handler.UpdateUserNote: ", err)
-		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to update note"})
+		log.Printf("Handler.UpdateUserNote: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Message: "Failed to update note"})
 	}
-	return c.JSON(http.StatusOK, note)
+	return c.Status(fiber.StatusOK).JSON(note)
 }
 
-func (h *Handler) DeleteUserNote(c echo.Context) error {
+func (h *Handler) DeleteUserNote(c *fiber.Ctx) error {
 	userID, err := utils.GetUserIDFromContext(c)
 	if err != nil {
-		return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: err.Error()})
+		return c.Status(fiber.StatusUnauthorized).JSON(models.ErrorResponse{Message: err.Error()})
 	}
-	noteID, err := strconv.ParseInt(c.Param("note_id"), 10, 64)
+	noteID, err := strconv.ParseInt(c.Params("note_id"), 10, 64)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid note ID"})
+		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Message: "Invalid note ID"})
 	}
 
-	err = h.service.DeleteUserNote(c.Request().Context(), userID, noteID)
+	err = h.service.DeleteUserNote(c.Context(), userID, noteID)
 	if err != nil {
-		if err == models.ErrNotFound {
-			return c.JSON(http.StatusNotFound, models.ErrorResponse{Message: "Note not found or not owned by user"})
+		if errors.Is(err, models.ErrNotFound) {
+			return c.Status(fiber.StatusNotFound).JSON(models.ErrorResponse{Message: "Note not found or not owned by user"})
 		}
-		c.Logger().Error("Handler.DeleteUserNote: ", err)
-		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to delete note"})
+		log.Printf("Handler.DeleteUserNote: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Message: "Failed to delete note"})
 	}
-	return c.NoContent(http.StatusNoContent)
+	return c.SendStatus(fiber.StatusNoContent)
 }
 
-func (h *Handler) AddLinkToNote(c echo.Context) error {
-	noteID, err := strconv.ParseInt(c.Param("note_id"), 10, 64)
+func (h *Handler) AddLinkToNote(c *fiber.Ctx) error {
+	noteID, err := strconv.ParseInt(c.Params("note_id"), 10, 64)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid note ID"})
+		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Message: "Invalid note ID"})
 	}
 
 	var req models.AddLinkToNoteData
-	if err := c.Bind(&req); err != nil {
-		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid request: " + err.Error()})
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Message: "Invalid request: " + err.Error()})
 	}
 	if err := h.validate.Struct(req); err != nil {
-		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Validation failed: " + err.Error()})
+		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Message: "Validation failed: " + err.Error()})
 	}
 
-	note, err := h.service.AddLinkToNote(c.Request().Context(), noteID, req)
+	note, err := h.service.AddLinkToNote(c.Context(), noteID, req)
 	if err != nil {
-		c.Logger().Error("Handler.AddLinkToNote: ", err)
-		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to add link to note"})
+		log.Printf("Handler.AddLinkToNote: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Message: "Failed to add link to note"})
 	}
-	return c.JSON(http.StatusCreated, note)
+	return c.Status(fiber.StatusCreated).JSON(note)
 }
 
-func (h *Handler) RemoveLinkFromNote(c echo.Context) error {
-	noteID, err := strconv.ParseInt(c.Param("note_id"), 10, 64)
+func (h *Handler) RemoveLinkFromNote(c *fiber.Ctx) error {
+	noteID, err := strconv.ParseInt(c.Params("note_id"), 10, 64)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid note ID"})
+		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Message: "Invalid note ID"})
 	}
-	linkID, err := strconv.ParseInt(c.Param("link_id"), 10, 64)
+	linkID, err := strconv.ParseInt(c.Params("link_id"), 10, 64)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid note ID"})
+		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Message: "Invalid note ID"})
 	}
 
-	err = h.service.RemoveLinkFromNote(c.Request().Context(), noteID, linkID)
+	err = h.service.RemoveLinkFromNote(c.Context(), noteID, linkID)
 	if err != nil {
-		if err == models.ErrNotFound {
-			return c.JSON(http.StatusNotFound, models.ErrorResponse{Message: "Link not found"})
+		if errors.Is(err, models.ErrNotFound) {
+			return c.Status(fiber.StatusNotFound).JSON(models.ErrorResponse{Message: "Link not found"})
 		}
-		c.Logger().Error("Handler.RemoveLinkFromNote: ", err)
-		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to remove link from note"})
+		log.Printf("Handler.RemoveLinkFromNote: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Message: "Failed to remove link from note"})
 	}
-	return c.NoContent(http.StatusNoContent)
+	return c.SendStatus(fiber.StatusNoContent)
 }
 
-func (h *Handler) PublishNoteToForum(c echo.Context) error {
+func (h *Handler) PublishNoteToForum(c *fiber.Ctx) error {
 	userID, err := utils.GetUserIDFromContext(c)
 	if err != nil {
-		return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: err.Error()})
+		return c.Status(fiber.StatusUnauthorized).JSON(models.ErrorResponse{Message: err.Error()})
 	}
-	noteID, err := strconv.ParseInt(c.Param("note_id"), 10, 64)
+	noteID, err := strconv.ParseInt(c.Params("note_id"), 10, 64)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid note ID"})
+		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Message: "Invalid note ID"})
 	}
 
 	var req models.ForumPostPublishDetails
-	if err := c.Bind(&req); err != nil {
-		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid request: " + err.Error()})
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Message: "Invalid request: " + err.Error()})
 	}
 	if err := h.validate.Struct(req); err != nil {
-		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Validation failed: " + err.Error()})
+		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Message: "Validation failed: " + err.Error()})
 	}
 
-	forumPost, err := h.service.PublishNoteToForum(c.Request().Context(), userID, noteID, req)
+	forumPost, err := h.service.PublishNoteToForum(c.Context(), userID, noteID, req)
 	if err != nil {
-		if err == models.ErrNotFound {
-			return c.JSON(http.StatusNotFound, models.ErrorResponse{Message: "Note not found or not owned by user"})
+		if errors.Is(err, models.ErrNotFound) {
+			return c.Status(fiber.StatusNotFound).JSON(models.ErrorResponse{Message: "Note not found or not owned by user"})
 		}
-		if err == models.ErrConflict {
-			return c.JSON(http.StatusConflict, models.ErrorResponse{Message: "Note already published"})
+		if errors.Is(err, models.ErrConflict) {
+			return c.Status(fiber.StatusConflict).JSON(models.ErrorResponse{Message: "Note already published"})
 		}
-		c.Logger().Error("Handler.PublishNoteToForum: ", err)
-		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to publish note to forum"})
+		log.Printf("Handler.PublishNoteToForum: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Message: "Failed to publish note to forum"})
 	}
-	return c.JSON(http.StatusCreated, forumPost)
+	return c.Status(fiber.StatusCreated).JSON(forumPost)
 }

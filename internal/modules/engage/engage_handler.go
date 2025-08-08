@@ -4,10 +4,10 @@ import (
 	"errors"
 	"jingdezhen-ceramics-backend/internal/models"
 	"jingdezhen-ceramics-backend/pkg/utils"
-	"net/http"
+	"log"
 	"strings"
 
-	"github.com/labstack/echo/v4"
+	"github.com/gofiber/fiber/v2"
 )
 
 type Handler struct {
@@ -19,35 +19,35 @@ func NewHandler(service ServiceInterface) *Handler {
 }
 
 // GetActivities handles the request to get a paginated list of activities.
-func (h *Handler) GetActivities(c echo.Context) error {
+func (h *Handler) GetActivities(c *fiber.Ctx) error {
 	page, limit := utils.GetPageLimit(c)
-	ctx := c.Request().Context()
+	ctx := c.Context()
 
 	activities, total, err := h.service.GetActivities(ctx, page, limit)
 	if err != nil {
-		c.Logger().Error("Handler.GetActivities: ", err)
-		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to retrieve activities"})
+		log.Printf("Handler.GetActivities: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Message: "Failed to retrieve activities"})
 	}
 
-	return c.JSON(http.StatusOK, models.NewPaginatedResponse(activities, page, limit, total))
+	return c.Status(fiber.StatusOK).JSON(models.NewPaginatedResponse(activities, page, limit, total))
 }
 
 // GetActivityArticle handles the request to get a detailed article.
-func (h *Handler) GetActivityArticle(c echo.Context) error {
-	idOrSlug := c.Param("activity_id_or_slug")
+func (h *Handler) GetActivityArticle(c *fiber.Ctx) error {
+	idOrSlug := c.Params("activity_id_or_slug")
 	if idOrSlug == "" {
-		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Activity ID or slug parameter is required"})
+		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Message: "Activity ID or slug parameter is required"})
 	}
 
-	ctx := c.Request().Context()
+	ctx := c.Context()
 	article, err := h.service.GetActivityArticle(ctx, idOrSlug)
 	if err != nil {
 		if errors.Is(err, models.ErrNotFound) || strings.Contains(err.Error(), models.ErrNotFound.Error()) {
-			return c.JSON(http.StatusNotFound, models.ErrorResponse{Message: "Article not found"})
+			return c.Status(fiber.StatusNotFound).JSON(models.ErrorResponse{Message: "Article not found"})
 		}
-		c.Logger().Error("Handler.GetActivityArticle: ", err)
-		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to retrieve article"})
+		log.Printf("Handler.GetActivityArticle: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Message: "Failed to retrieve article"})
 	}
 
-	return c.JSON(http.StatusOK, article)
+	return c.Status(fiber.StatusOK).JSON(article)
 }

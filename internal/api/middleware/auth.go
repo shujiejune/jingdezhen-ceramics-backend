@@ -5,9 +5,9 @@ import (
 	"jingdezhen-ceramics-backend/internal/models"
 	"net/http"
 
+	echojwt "github.com/gofiber/fiber/v2-jwt/v4"
 	"github.com/golang-jwt/jwt/v5"
-	echojwt "github.com/labstack/echo-jwt/v4"
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo"
 )
 
 // JWTMAuth configures and returns Echo's JWT middleware.

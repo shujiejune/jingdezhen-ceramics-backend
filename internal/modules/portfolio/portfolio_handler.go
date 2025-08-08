@@ -4,12 +4,12 @@ import (
 	"errors"
 	"jingdezhen-ceramics-backend/internal/models"
 	"jingdezhen-ceramics-backend/pkg/utils"
-	"net/http"
+	"log"
 	"strconv"
 	"strings"
 
 	"github.com/go-playground/validator/v10"
-	"github.com/labstack/echo/v4"
+	"github.com/gofiber/fiber/v2"
 )
 
 // Handler handles HTTP requests for the portfolio module.
@@ -27,11 +27,11 @@ func NewHandler(service ServiceInterface) *Handler {
 }
 
 // GetWorks handles requests to get a paginated list of portfolio works.
-func (h *Handler) GetWorks(c echo.Context) error {
+func (h *Handler) GetWorks(c *fiber.Ctx) error {
 	userID, _ := utils.GetUserIDFromContext(c) // Optional: for upvotes status
 	page, limit := utils.GetPageLimit(c)
-	sort := c.QueryParam("sort")
-	tagsQuery := c.QueryParam("tags")
+	sort := c.Query("sort")
+	tagsQuery := c.Query("tags")
 	var tags []string
 	if tagsQuery != "" {
 		// Split the comma-separated string into a slice
@@ -45,131 +45,131 @@ func (h *Handler) GetWorks(c echo.Context) error {
 		Sort:  sort,
 	}
 
-	works, total, err := h.service.GetWorks(c.Request().Context(), userID, filters)
+	works, total, err := h.service.GetWorks(c.Context(), userID, filters)
 	if err != nil {
-		c.Logger().Error("Handler.GetWorks: ", err)
-		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to retrieve portfolio works"})
+		log.Printf("Handler.GetWorks: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Message: "Failed to retrieve portfolio works"})
 	}
 
-	return c.JSON(http.StatusOK, models.NewPaginatedResponse(works, page, limit, total))
+	return c.Status(fiber.StatusOK).JSON(models.NewPaginatedResponse(works, page, limit, total))
 }
 
 // GetWorkByID handles requests to get a single, detailed portfolio work.
-func (h *Handler) GetWorkByID(c echo.Context) error {
+func (h *Handler) GetWorkByID(c *fiber.Ctx) error {
 	userID, _ := utils.GetUserIDFromContext(c)
-	workID, err := strconv.ParseInt(c.Param("work_id"), 10, 64)
+	workID, err := strconv.ParseInt(c.Params("work_id"), 10, 64)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid work ID"})
+		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Message: "Invalid work ID"})
 	}
 
-	work, err := h.service.GetWorkByID(c.Request().Context(), userID, workID)
+	work, err := h.service.GetWorkByID(c.Context(), userID, workID)
 	if err != nil {
 		if errors.Is(err, models.ErrNotFound) {
-			return c.JSON(http.StatusNotFound, models.ErrorResponse{Message: "Portfolio work not found"})
+			return c.Status(fiber.StatusNotFound).JSON(models.ErrorResponse{Message: "Portfolio work not found"})
 		}
-		c.Logger().Error("Handler.GetWorkByID: ", err)
-		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to retrieve portfolio work"})
+		log.Printf("Handler.GetWorkByID: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Message: "Failed to retrieve portfolio work"})
 	}
 
-	return c.JSON(http.StatusOK, work)
+	return c.Status(fiber.StatusOK).JSON(work)
 }
 
 // --- Protected Handlers ---
 
 // CreateWork handles requests from authenticated users to create a new portfolio work.
-func (h *Handler) CreateWork(c echo.Context) error {
+func (h *Handler) CreateWork(c *fiber.Ctx) error {
 	userID, err := utils.GetUserIDFromContext(c)
 	if err != nil {
-		return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: err.Error()})
+		return c.Status(fiber.StatusUnauthorized).JSON(models.ErrorResponse{Message: err.Error()})
 	}
 
 	var req models.CreateWorkRequest
-	if err := c.Bind(&req); err != nil {
-		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid request body"})
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Message: "Invalid request body"})
 	}
 	if err := h.validate.Struct(req); err != nil {
-		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Validation failed: " + err.Error()})
+		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Message: "Validation failed: " + err.Error()})
 	}
 
-	work, err := h.service.CreateWork(c.Request().Context(), userID, req)
+	work, err := h.service.CreateWork(c.Context(), userID, req)
 	if err != nil {
-		c.Logger().Error("Handler.CreateWork: ", err)
-		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to create portfolio work"})
+		log.Printf("Handler.CreateWork: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Message: "Failed to create portfolio work"})
 	}
-	return c.JSON(http.StatusCreated, work)
+	return c.Status(fiber.StatusCreated).JSON(work)
 }
 
 // UpdateWork handles requests from authenticated users to update their own portfolio work.
-func (h *Handler) UpdateWork(c echo.Context) error {
+func (h *Handler) UpdateWork(c *fiber.Ctx) error {
 	userID, err := utils.GetUserIDFromContext(c)
 	if err != nil {
-		return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: err.Error()})
+		return c.Status(fiber.StatusUnauthorized).JSON(models.ErrorResponse{Message: err.Error()})
 	}
-	workID, err := strconv.ParseInt(c.Param("work_id"), 10, 64)
+	workID, err := strconv.ParseInt(c.Params("work_id"), 10, 64)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid work ID"})
+		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Message: "Invalid work ID"})
 	}
 
 	var req models.UpdateWorkRequest
-	if err := c.Bind(&req); err != nil {
-		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid request body"})
+	if err := c.BodyParser(&req); err != nil {
+		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Message: "Invalid request body"})
 	}
 	if err := h.validate.Struct(req); err != nil {
-		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Validation failed: " + err.Error()})
+		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Message: "Validation failed: " + err.Error()})
 	}
 
-	work, err := h.service.UpdateWork(c.Request().Context(), userID, workID, req)
+	work, err := h.service.UpdateWork(c.Context(), userID, workID, req)
 	if err != nil {
 		if errors.Is(err, models.ErrForbidden) {
-			return c.JSON(http.StatusForbidden, models.ErrorResponse{Message: "You do not have permission to edit this work"})
+			return c.Status(fiber.StatusForbidden).JSON(models.ErrorResponse{Message: "You do not have permission to edit this work"})
 		}
-		c.Logger().Error("Handler.UpdateWork: ", err)
-		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to update portfolio work"})
+		log.Printf("Handler.UpdateWork: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Message: "Failed to update portfolio work"})
 	}
-	return c.JSON(http.StatusOK, work)
+	return c.Status(fiber.StatusOK).JSON(work)
 }
 
 // DeleteWork handles requests to delete a portfolio work, checking for ownership or admin role.
-func (h *Handler) DeleteWork(c echo.Context) error {
+func (h *Handler) DeleteWork(c *fiber.Ctx) error {
 	userID, err := utils.GetUserIDFromContext(c)
 	if err != nil {
-		return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: err.Error()})
+		return c.Status(fiber.StatusUnauthorized).JSON(models.ErrorResponse{Message: err.Error()})
 	}
-	userRole := c.Get("userRole").(string)
+	userRole := c.Locals("userRole").(string)
 
-	workID, err := strconv.ParseInt(c.Param("work_id"), 10, 64)
+	workID, err := strconv.ParseInt(c.Params("work_id"), 10, 64)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid work ID"})
+		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Message: "Invalid work ID"})
 	}
 
-	if err := h.service.DeleteWork(c.Request().Context(), userID, userRole, workID); err != nil {
+	if err := h.service.DeleteWork(c.Context(), userID, userRole, workID); err != nil {
 		if errors.Is(err, models.ErrForbidden) {
-			return c.JSON(http.StatusForbidden, models.ErrorResponse{Message: "You do not have permission to delete this work"})
+			return c.Status(fiber.StatusForbidden).JSON(models.ErrorResponse{Message: "You do not have permission to delete this work"})
 		}
-		c.Logger().Error("Handler.DeleteWork: ", err)
-		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to delete portfolio work"})
+		log.Printf("Handler.DeleteWork: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Message: "Failed to delete portfolio work"})
 	}
-	return c.NoContent(http.StatusNoContent)
+	return c.SendStatus(fiber.StatusNoContent)
 }
 
 // ToggleWorkUpvote handles requests from authenticated users to upvote or downvote a work.
-func (h *Handler) ToggleWorkUpvote(c echo.Context) error {
+func (h *Handler) ToggleWorkUpvote(c *fiber.Ctx) error {
 	userID, err := utils.GetUserIDFromContext(c)
 	if err != nil {
-		return c.JSON(http.StatusUnauthorized, models.ErrorResponse{Message: err.Error()})
+		return c.Status(fiber.StatusUnauthorized).JSON(models.ErrorResponse{Message: err.Error()})
 	}
-	workID, err := strconv.ParseInt(c.Param("work_id"), 10, 64)
+	workID, err := strconv.ParseInt(c.Params("work_id"), 10, 64)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, models.ErrorResponse{Message: "Invalid work ID"})
+		return c.Status(fiber.StatusBadRequest).JSON(models.ErrorResponse{Message: "Invalid work ID"})
 	}
 
-	result, err := h.service.ToggleWorkUpvote(c.Request().Context(), userID, workID)
+	result, err := h.service.ToggleWorkUpvote(c.Context(), userID, workID)
 	if err != nil {
 		if errors.Is(err, models.ErrNotFound) {
-			return c.JSON(http.StatusNotFound, models.ErrorResponse{Message: "Portfolio work not found"})
+			return c.Status(fiber.StatusNotFound).JSON(models.ErrorResponse{Message: "Portfolio work not found"})
 		}
-		c.Logger().Error("Handler.ToggleWorkUpvote: ", err)
-		return c.JSON(http.StatusInternalServerError, models.ErrorResponse{Message: "Failed to upvote"})
+		log.Printf("Handler.ToggleWorkUpvote: %v", err)
+		return c.Status(fiber.StatusInternalServerError).JSON(models.ErrorResponse{Message: "Failed to upvote"})
 	}
-	return c.JSON(http.StatusOK, result)
+	return c.Status(fiber.StatusOK).JSON(result)
 }
