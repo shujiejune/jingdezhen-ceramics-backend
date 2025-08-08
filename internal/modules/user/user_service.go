@@ -41,7 +41,7 @@ type ServiceInterface interface {
 }
 
 type Service struct {
-	userRepo RepositoryInterface
+	userRepo          RepositoryInterface
 	emailer           emailSvc.ServiceInterface // For sending emails
 	templateManager   *emailSvc.TemplateManager
 	jwtSecret         string
@@ -122,7 +122,7 @@ func (s *Service) Signup(ctx context.Context, req models.SignupRequest) (*models
 	}
 
 	// 5. Send activation email
-	activationURL := fmt.Sprintf("%s/activate?token=%s", s.clientOrigin, activationToken, expiresAt)
+	activationURL := fmt.Sprintf("%s/activate?token=%s", s.clientOrigin, activationToken)
 
 	htmlContent, err := s.templateManager.GenerateActivateAccountEmailHTML(emailSvc.TemplateData{
 		Name: createdUser.Nickname,
