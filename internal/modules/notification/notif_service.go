@@ -24,13 +24,13 @@ type ServiceInterface interface {
 }
 
 type Service struct {
-	repo             Repository
-	userRepo         user.Repository
+	repo             RepositoryInterface
+	userRepo         user.RepositoryInterface
 	webSocketService WebSocketService
 }
 
 // NewService creates a new notification service.
-func NewService(repo Repository, userRepo user.Repository, wsService WebSocketService) ServiceInterface {
+func NewService(repo RepositoryInterface, userRepo user.RepositoryInterface, wsService WebSocketService) ServiceInterface {
 	return &Service{
 		repo:             repo,
 		userRepo:         userRepo,

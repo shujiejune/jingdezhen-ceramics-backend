@@ -11,191 +11,193 @@ import (
 	"jingdezhen-ceramics-backend/internal/modules/notification"
 	"jingdezhen-ceramics-backend/internal/modules/portfolio"
 	"jingdezhen-ceramics-backend/internal/modules/user"
-	"net/http"
 
-	"github.com/labstack/echo/v4"
+	"github.com/gofiber/contrib/websocket"
+	"github.com/gofiber/fiber/v2"
 )
 
 // SetupRoutes configures the API routes.
 func SetupRoutes(
-	e *echo.Echo, jwtSecretKey string,
+	app *fiber.App, jwtSecretKey string,
 	userHandler *user.Handler,
 	notifHandler *notification.Handler,
+	forumHandler *forum.Handler,
 	noteHandler *note.Handler,
 	csHandler *ceramicstory.Handler,
 	galleryHandler *gallery.Handler,
 	engageHandler *engage.Handler,
 	courseHandler *course.Handler,
-	forumHandler *forum.Handler,
 	portfolioHandler *portfolio.Handler,
 ) {
-	e.GET("/", func(c echo.Context) error {
-		return c.JSON(http.StatusOK, map[string]string{"message": "Welcome to Jingdezhen Ceramics Learning and Communication Platform!"})
+	app.Get("/", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{"message": "Welcome to Jingdezhen Ceramics Learning and Communication Platform!"})
 	})
 
+	app.Get("/ws", websocket.New(wsHandler))
+
 	/* --- Contact (send feedback) --- */
-	e.POST("/contact", userHandler.SubmitContactForm)
+	app.Post("/contact", userHandler.SubmitContactForm)
 
 	/* --- Auth (Public) --- */
-	authGroup := e.Group("/auth")
+	authGroup := app.Group("/auth")
 	{
-		authGroup.POST("/signup", userHandler.Signup)
-		authGroup.POST("/login", userHandler.Login)
-		authGroup.POST("/activate", userHandler.ActivateAccount)
-		authGroup.POST("resend-activation", userHandler.ResendActivation)
-		authGroup.POST("request-password-reset", userHandler.RequestPasswordReset)
-		authGroup.POST("reset-password", userHandler.ResetPassword)
-		authGroup.GET("/google/login", userHandler.GoogleLogin)
-		authGroup.GET("/google/callback", userHandler.GoogleCallback)
+		authGroup.Post("/signup", userHandler.Signup)
+		authGroup.Post("/login", userHandler.Login)
+		authGroup.Post("/activate", userHandler.ActivateAccount)
+		authGroup.Post("resend-activation", userHandler.ResendActivation)
+		authGroup.Post("request-password-reset", userHandler.RequestPasswordReset)
+		authGroup.Post("reset-password", userHandler.ResetPassword)
+		authGroup.Get("/google/login", userHandler.GoogleLogin)
+		authGroup.Get("/google/callback", userHandler.GoogleCallback)
 	}
 
 	/* --- User Profile (Protected) --- */
 	// If need backend routes for auth (e.g., refresh token, logout initiated by backend), define here.
-	profileGroup := e.Group("/profile")
+	profileGroup := app.Group("/profile")
 	profileGroup.Use(middleware.JWTMAuth(jwtSecretKey))
 	{
-		profileGroup.GET("", userHandler.GetProfile)
-		profileGroup.PUT("", userHandler.UpdateProfile)
+		profileGroup.Get("", userHandler.GetProfile)
+		profileGroup.Put("", userHandler.UpdateProfile)
 		// ... other user-specific routes like badges, subscriptions
 	}
 
-	/* --- Note Module (Protected) --- */
-	noteGroup := e.Group("/notes")
-	noteGroup.Use(middleware.JWTMAuth(jwtSecretKey))
-	{
-		noteGroup.GET("", noteHandler.GetUserNotes)
-		noteGroup.GET("/:note_id", noteHandler.GetUserNoteByID)
-		noteGroup.POST("", noteHandler.CreateUserNote)
-		noteGroup.PUT("/:note_id", noteHandler.UpdateUserNote)
-		noteGroup.DELETE("/:note_id", noteHandler.DeleteUserNote)
-		noteGroup.POST("/:note_id/links", noteHandler.AddLinkToNote)
-		noteGroup.DELETE("/:note_id/links/:link_id", noteHandler.RemoveLinkFromNote)
-		noteGroup.POST("/:note_id/publish-to-forum", noteHandler.PublishNoteToForum)
-	}
-
 	/* --- Notification Module (Protected) --- */
-	notifGroup := e.Group("/notifications")
+	notifGroup := app.Group("/notifications")
 	notifGroup.Use(middleware.JWTMAuth(jwtSecretKey))
 	{
-		notifGroup.GET("", notifHandler.GetNotifications)
-		notifGroup.GET("/unread-count", notifHandler.GetUnreadNotificationCount)
-		notifGroup.POST("/mark-all-read", notifHandler.MarkAllAsRead)
-		notifGroup.POST("/:notification_id/mark-read", notifHandler.MarkAsRead)
+		notifGroup.Get("", notifHandler.GetNotifications)
+		notifGroup.Get("/unread-count", notifHandler.GetUnreadNotificationCount)
+		notifGroup.Post("/mark-all-read", notifHandler.MarkAllAsRead)
+		notifGroup.Post("/:notification_id/mark-read", notifHandler.MarkAsRead)
+	}
+
+	/* --- Forum (Public read, Protected write/interact) --- */
+	fGroup := app.Group("/forum")
+	{
+		fGroup.Get("/posts", forumHandler.GetPosts)           // Params: ?page=1&limit=10&sort=latest|hottest&tag=...&category=...
+		fGroup.Get("/posts/search", forumHandler.SearchPosts) // Param: ?q=keyword
+		fGroup.Get("/posts/:post_id", forumHandler.GetPostByID)
+		fGroup.Get("/topics", forumHandler.GetTopicsTagCloud) // Tag cloud
+		fGroup.Get("/categories", forumHandler.GetCategories)
+
+		// Protected actions
+		authForumGroup := fGroup.Group("")
+		authForumGroup.Use(middleware.JWTMAuth(jwtSecretKey))
+		{
+			authForumGroup.Get("/saved-posts", forumHandler.GetSavedForumPosts)
+			authForumGroup.Post("/posts", forumHandler.CreatePost)
+			authForumGroup.Put("/posts/:post_id", forumHandler.UpdatePost)    // Check ownership
+			authForumGroup.Delete("/posts/:post_id", forumHandler.DeletePost) // Check ownership or admin
+			authForumGroup.Post("/posts/:post_id/comments", forumHandler.CreateComment)
+			authForumGroup.Post("/posts/:post_id/comments/:comment_id/replies", forumHandler.CreateReply)
+			authForumGroup.Put("/comments/:comment_id", forumHandler.UpdateComment)
+			authForumGroup.Delete("/comments/:comment_id", forumHandler.DeleteComment)
+			authForumGroup.Post("/posts/:post_id/like", forumHandler.TogglePostLike)
+			authForumGroup.Post("/posts/:post_id/save", forumHandler.TogglePostSave)
+			authForumGroup.Post("/comments/:comment_id/like", forumHandler.ToggleCommentLike)
+		}
+	}
+
+	/* --- Note Module (Protected) --- */
+	noteGroup := app.Group("/notes")
+	noteGroup.Use(middleware.JWTMAuth(jwtSecretKey))
+	{
+		noteGroup.Get("", noteHandler.GetUserNotes)
+		noteGroup.Get("/:note_id", noteHandler.GetUserNoteByID)
+		noteGroup.Post("", noteHandler.CreateUserNote)
+		noteGroup.Put("/:note_id", noteHandler.UpdateUserNote)
+		noteGroup.Delete("/:note_id", noteHandler.DeleteUserNote)
+		noteGroup.Post("/:note_id/links", noteHandler.AddLinkToNote)
+		noteGroup.Delete("/:note_id/links/:link_id", noteHandler.RemoveLinkFromNote)
+		noteGroup.Post("/:note_id/publish-to-forum", noteHandler.PublishNoteToForum)
 	}
 
 	/* --- Ceramic Story (Public) --- */
-	csGroup := e.Group("/ceramicstory")
+	csGroup := app.Group("/ceramicstory")
 	{
-		csGroup.GET("", csHandler.GetAllDynasties)
-		csGroup.GET("/:dynasty_id_or_slug", csHandler.GetDynastyDetail)
+		csGroup.Get("", csHandler.GetAllDynasties)
+		csGroup.Get("/:dynasty_id_or_slug", csHandler.GetDynastyDetail)
 	}
 
 	/* --- Gallery (Public for viewing, Protected for actions) --- */
-	gGroup := e.Group("/gallery")
+	gGroup := app.Group("/gallery")
 	{
-		gGroup.GET("/artworks", galleryHandler.GetArtworks) // Params: ?category=...&artist=...
-		gGroup.GET("/artworks/:artwork_id", galleryHandler.GetArtworkByID)
-		gGroup.GET("/artists", galleryHandler.GetArtists)
-		gGroup.GET("/artists/:artist_id", galleryHandler.GetArtistByID)
-		gGroup.GET("/categories", galleryHandler.GetGalleryCategories)
+		gGroup.Get("/artworks", galleryHandler.GetArtworks) // Params: ?category=...&artist=...
+		gGroup.Get("/artworks/:artwork_id", galleryHandler.GetArtworkByID)
+		gGroup.Get("/artists", galleryHandler.GetArtists)
+		gGroup.Get("/artists/:artist_id", galleryHandler.GetArtistByID)
+		gGroup.Get("/categories", galleryHandler.GetGalleryCategories)
 
 		// Protected actions for gallery
 		authGalleryGroup := gGroup.Group("")
 		authGalleryGroup.Use(middleware.JWTMAuth(jwtSecretKey))
 		{
-			authGalleryGroup.GET("/favorites", galleryHandler.GetFavoriteArtworks)
-			authGalleryGroup.POST("/artworks/:artwork_id/favorite", galleryHandler.MarkAsFavorite)
-			authGalleryGroup.DELETE("/artworks/:artwork_id/favorite", galleryHandler.UnmarkAsFavorite)
-			authGalleryGroup.POST("/artworks/:artwork_id/notes", galleryHandler.AddNoteToArtwork)
+			authGalleryGroup.Get("/favorites", galleryHandler.GetFavoriteArtworks)
+			authGalleryGroup.Post("/artworks/:artwork_id/favorite", galleryHandler.MarkAsFavorite)
+			authGalleryGroup.Delete("/artworks/:artwork_id/favorite", galleryHandler.UnmarkAsFavorite)
+			authGalleryGroup.Post("/artworks/:artwork_id/notes", galleryHandler.AddNoteToArtwork)
 		}
 	}
 
 	/* --- Engage (Public) --- */
-	engageGroup := e.Group("/engage")
+	engageGroup := app.Group("/engage")
 	{
-		engageGroup.GET("", engageHandler.GetActivities)
-		engageGroup.GET("/:activity_id_or_slug", engageHandler.GetActivityArticle) // For detailed article
+		engageGroup.Get("", engageHandler.GetActivities)
+		engageGroup.Get("/:activity_id_or_slug", engageHandler.GetActivityArticle) // For detailed article
 	}
 
 	/* --- Course (Mixed Public/Protected) --- */
-	cGroup := e.Group("/courses")
+	cGroup := app.Group("/courses")
 	{
-		cGroup.GET("", courseHandler.GetAllCourses)
-		cGroup.GET("/quizzes/:quiz_id", courseHandler.GetQuiz)
-		cGroup.GET("/:course_id", courseHandler.GetCourseDetails)                       // Chapters list
-		cGroup.GET("/:course_id/chapters/:chapter_id", courseHandler.GetChapterContent) // Public up to chapter 2
+		cGroup.Get("", courseHandler.GetAllCourses)
+		cGroup.Get("/quizzes/:quiz_id", courseHandler.GetQuiz)
+		cGroup.Get("/:course_id", courseHandler.GetCourseDetails)                       // Chapters list
+		cGroup.Get("/:course_id/chapters/:chapter_id", courseHandler.GetChapterContent) // Public up to chapter 2
 
 		// Protected access for full course and progress:
 		authCourseGroup := cGroup.Group("")
 		authCourseGroup.Use(middleware.JWTMAuth(jwtSecretKey))
 		authCourseGroup.Use(middleware.NormalUserRequired())
 		{
-			authCourseGroup.POST("/:course_id/enroll", courseHandler.EnrollCourse)
-			authCourseGroup.GET("/enrolled", courseHandler.GetEnrolledCourses)
-			authCourseGroup.GET("/:course_id/chapters/:chapter_id/full", courseHandler.GetFullChapterContentForEnrolled)
-			authCourseGroup.POST("/:course_id/chapters/:chapter_id/blocks/:block_id/complete", courseHandler.MarkContentBlockComplete)
-			authCourseGroup.POST("/:course_id/chapters/:chapter_id/blocks/:block_id/video-progress", courseHandler.UpdateVideoProgress)
-			authCourseGroup.POST("/:course_id/chapters/:chapter_id/notes", courseHandler.AddNoteToChapter)
-			authCourseGroup.POST("/:course_id/chapters/:chapter_id/quizzes/:assignment_id/submit", courseHandler.SubmitAssignment)
-			authCourseGroup.POST("/:course_id/chapters/:chapter_id/quizzes/:quiz_id/submit", courseHandler.SubmitQuiz)
+			authCourseGroup.Post("/:course_id/enroll", courseHandler.EnrollCourse)
+			authCourseGroup.Get("/enrolled", courseHandler.GetEnrolledCourses)
+			authCourseGroup.Get("/:course_id/chapters/:chapter_id/full", courseHandler.GetFullChapterContentForEnrolled)
+			authCourseGroup.Post("/:course_id/chapters/:chapter_id/blocks/:block_id/complete", courseHandler.MarkContentBlockComplete)
+			authCourseGroup.Post("/:course_id/chapters/:chapter_id/blocks/:block_id/video-progress", courseHandler.UpdateVideoProgress)
+			authCourseGroup.Post("/:course_id/chapters/:chapter_id/notes", courseHandler.AddNoteToChapter)
+			authCourseGroup.Post("/:course_id/chapters/:chapter_id/quizzes/:assignment_id/submit", courseHandler.SubmitAssignment)
+			authCourseGroup.Post("/:course_id/chapters/:chapter_id/quizzes/:quiz_id/submit", courseHandler.SubmitQuiz)
 			//authCourseGroup.POST("/:course_id/chapters/:chapter_id/video-quizzes/:quiz_id/submit", courseHandler.SubmitVideoQuiz)
 		}
 	}
 
-	/* --- Forum (Public read, Protected write/interact) --- */
-	fGroup := e.Group("/forum")
-	{
-		fGroup.GET("/posts", forumHandler.GetPosts)           // Params: ?page=1&limit=10&sort=latest|hottest&tag=...&category=...
-		fGroup.GET("/posts/search", forumHandler.SearchPosts) // Param: ?q=keyword
-		fGroup.GET("/posts/:post_id", forumHandler.GetPostByID)
-		fGroup.GET("/topics", forumHandler.GetTopicsTagCloud) // Tag cloud
-		fGroup.GET("/categories", forumHandler.GetCategories)
-
-		// Protected actions
-		authForumGroup := fGroup.Group("")
-		authForumGroup.Use(middleware.JWTMAuth(jwtSecretKey))
-		{
-			authForumGroup.GET("/saved-posts", forumHandler.GetSavedForumPosts)
-			authForumGroup.POST("/posts", forumHandler.CreatePost)
-			authForumGroup.PUT("/posts/:post_id", forumHandler.UpdatePost)    // Check ownership
-			authForumGroup.DELETE("/posts/:post_id", forumHandler.DeletePost) // Check ownership or admin
-			authForumGroup.POST("/posts/:post_id/comments", forumHandler.CreateComment)
-			authForumGroup.POST("/posts/:post_id/comments/:comment_id/replies", forumHandler.CreateReply)
-			authForumGroup.PUT("/comments/:comment_id", forumHandler.UpdateComment)
-			authForumGroup.DELETE("/comments/:comment_id", forumHandler.DeleteComment)
-			authForumGroup.POST("/posts/:post_id/like", forumHandler.TogglePostLike)
-			authForumGroup.POST("/posts/:post_id/save", forumHandler.TogglePostSave)
-			authForumGroup.POST("/comments/:comment_id/like", forumHandler.ToggleCommentLike)
-		}
-	}
-
 	/* --- Portfolio (Public read, Protected kudos) --- */
-	pGroup := e.Group("/portfolio")
+	pGroup := app.Group("/portfolio")
 	{
-		pGroup.GET("", portfolioHandler.GetWorks) // Params: ?page=1&category=...&sort=upvotes
-		pGroup.GET("/:work_id", portfolioHandler.GetWorkByID)
+		pGroup.Get("", portfolioHandler.GetWorks) // Params: ?page=1&category=...&sort=upvotes
+		pGroup.Get("/:work_id", portfolioHandler.GetWorkByID)
 
 		// Protected actions
 		authPortfolioGroup := pGroup.Group("")
 		authPortfolioGroup.Use(middleware.JWTMAuth(jwtSecretKey))
 		{
-			authPortfolioGroup.POST("/works", portfolioHandler.CreateWork)
-			authPortfolioGroup.PUT("/works/:work_id", portfolioHandler.UpdateWork)
-			authPortfolioGroup.DELETE("/works/:work_id", portfolioHandler.DeleteWork)
-			authPortfolioGroup.POST("/works/:work_id/upvotes", portfolioHandler.ToggleWorkUpvote)
+			authPortfolioGroup.Post("/works", portfolioHandler.CreateWork)
+			authPortfolioGroup.Put("/works/:work_id", portfolioHandler.UpdateWork)
+			authPortfolioGroup.Delete("/works/:work_id", portfolioHandler.DeleteWork)
+			authPortfolioGroup.Post("/works/:work_id/upvotes", portfolioHandler.ToggleWorkUpvote)
 		}
 	}
 
 	/* --- Admin Routes (Protected by Admin Role) --- */
-	adminGroup := e.Group("/admin")
+	adminGroup := app.Group("/admin")
 	adminGroup.Use(middleware.JWTMAuth(jwtSecretKey))
 	adminGroup.Use(middleware.AdminRequired())
 	{
-		adminGroup.GET("/dashboard/student-progress", adminHandler.GetStudentProgressDashboard)
-		adminGroup.POST("/forum/posts/:post_id/pin", adminHandler.PinForumPost)
-		adminGroup.POST("/forum/posts/:post_id/archive", adminHandler.ArchiveForumPost)
-		adminGroup.DELETE("/forum/posts/:post_id", adminHandler.DeleteForumPostAsAdmin)
-		adminGroup.POST("/portfolio/works/:work_id/highlight", adminHandler.HighlightPortfolioWork)
+		adminGroup.Get("/dashboard/student-progress", adminHandler.GetStudentProgressDashboard)
+		adminGroup.Post("/forum/posts/:post_id/pin", adminHandler.PinForumPost)
+		adminGroup.Post("/forum/posts/:post_id/archive", adminHandler.ArchiveForumPost)
+		adminGroup.Delete("/forum/posts/:post_id", adminHandler.DeleteForumPostAsAdmin)
+		adminGroup.Post("/portfolio/works/:work_id/highlight", adminHandler.HighlightPortfolioWork)
 		// ... other admin functionalities
 	}
 }

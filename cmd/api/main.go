@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -22,9 +21,11 @@ import (
 	"jingdezhen-ceramics-backend/internal/modules/user"
 	"jingdezhen-ceramics-backend/pkg/email"
 
+	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
+	"github.com/gofiber/fiber/v2/middleware/logger"
+	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/labstack/echo/v4"
-	"github.com/labstack/echo/v4/middleware"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 )
@@ -35,16 +36,18 @@ func main() {
 		log.Fatalf("Could not load config: %v", err)
 	}
 
-	e := echo.New()
-	e.Logger.Fatal(e.Start(":1323"))
+	// Initialize Fiber App
+	app := fiber.New()
+	//e.Logger.Fatal(e.Start(":1323"))
 
 	// Middleware
-	e.Use(middleware.Logger())
-	e.Use(middleware.Recover())
-	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{ // Configure CORS appropriately
-		AllowOrigins: []string{"http://localhost:5173", cfg.ClientOrigin}, // Your SvelteKit dev and prod origins
-		AllowMethods: []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch, http.MethodOptions},
-		AllowHeaders: []string{echo.HeaderOrigin, echo.HeaderContentType, echo.HeaderAccept, echo.HeaderAuthorization},
+	app.Use(recover.New())
+	app.Use(logger.New())
+	app.Use(cors.New(cors.Config{
+		AllowOrigins:     cfg.ClientOrigin + ", http://localhost:5173",
+		AllowHeaders:     "Origin, Content-Type, Accept, Authorization",
+		AllowMethods:     "GET,POST,PUT,DELETE,PATCH,OPTIONS",
+		AllowCredentials: true,
 	}))
 
 	// Database connection
@@ -62,7 +65,7 @@ func main() {
 	if err := dbPool.Ping(context.Background()); err != nil {
 		log.Fatalf("Unable to ping database: %v\n", err)
 	}
-	e.Logger.Info("Successfully connected to the database!")
+	log.Println("Successfully connected to the database!")
 
 	// Dependency injection
 	// 1. Initialize Google OAuth Config
@@ -87,14 +90,9 @@ func main() {
 		log.Fatalf("Failed to parse email templates: %v", err)
 	}
 
-	forumRepo := forum.NewRepository(dbPool)
-	forumService := forum.NewService(forumRepo)
-	forumHandler := forum.NewHandler(forumService)
-
 	userRepo := user.NewRepository(dbPool)
 	userService := user.NewService(
 		userRepo,
-		forumService,
 		sesSender,
 		templateManager,
 		cfg.JWTSecret,
@@ -106,12 +104,24 @@ func main() {
 	// You'll also need an admin handler if it's separate
 	// adminHandler := user.NewAdminHandler(userService, other admin services)
 
+	notifRepo := notification.NewRepository(dbPool)
+	notifService := notification.NewService(notifRepo, userRepo, nil) // WebSocket service is nil for now
+	notifHandler := notification.NewHandler(notifService)
+
+	forumRepo := forum.NewRepository(dbPool)
+	forumService := forum.NewService(forumRepo, notifService)
+	forumHandler := forum.NewHandler(forumService)
+
+	noteRepo := note.NewRepository(dbPool)
+	noteService := note.NewService(noteRepo, forumService)
+	noteHandler := note.NewHandler(noteService)
+
 	ceramicStoryRepo := ceramicstory.NewRepository(dbPool)
 	ceramicStoryService := ceramicstory.NewService(ceramicStoryRepo)
 	ceramicStoryHandler := ceramicstory.NewHandler(ceramicStoryService)
 
 	galleryRepo := gallery.NewRepository(dbPool)
-	galleryService := gallery.NewService(galleryRepo, userService)
+	galleryService := gallery.NewService(galleryRepo, noteService)
 	galleryHandler := gallery.NewHandler(galleryService)
 
 	engageRepo := engage.NewRepository(dbPool)
@@ -119,7 +129,7 @@ func main() {
 	engageHandler := engage.NewHandler(engageService)
 
 	courseRepo := course.NewRepository(dbPool)
-	courseService := course.NewService(courseRepo, userService)
+	courseService := course.NewService(courseRepo, noteService)
 	courseHandler := course.NewHandler(courseService)
 
 	portfolioRepo := portfolio.NewRepository(dbPool)
@@ -127,34 +137,37 @@ func main() {
 	portfolioHandler := portfolio.NewHandler(portfolioService)
 
 	// Initialize router, passing all handlers and other necessary dependencies
-	api.SetupRoutes(e, cfg.JWTSecret,
+	api.SetupRoutes(app, cfg.JWTSecret,
 		userHandler,
 		// adminHandler, // Pass if you have a separate admin handler instance
+		notifHandler,
+		forumHandler,
+		noteHandler,
 		ceramicStoryHandler,
 		galleryHandler,
 		engageHandler,
 		courseHandler,
-		forumHandler,
 		portfolioHandler,
 	)
 
 	// Start server (graceful shutdown logic)
-	go func() {
-		if err := e.Start(":" + cfg.ServerPort); err != nil && err != http.ErrServerClosed {
-			// Using e.Logger here because 'e' is initialized.
-			e.Logger.Fatal("shutting down the server an error occurred:", err)
-		}
-	}()
-
+	// Listen on a channel for interrupt signals.
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+	// Start the server in a goroutine.
+	go func() {
+		if err := app.Listen(":" + cfg.ServerPort); err != nil {
+			log.Printf("Server error: %v", err)
+		}
+	}()
+	// Block until a signal is received.
 	<-quit
+	log.Println("Shutdown signal received, gracefully shutting down...")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	if err := e.Shutdown(ctx); err != nil {
-		e.Logger.Fatal("Server forced to shutdown:", err)
+	// Attempt a graceful shutdown.
+	if err := app.ShutdownWithTimeout(10 * time.Second); err != nil {
+		log.Fatal("Server forced to shutdown:", err)
 	}
+
 	log.Println("Server exiting")
 }
