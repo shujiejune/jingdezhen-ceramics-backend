@@ -11,6 +11,7 @@ import (
 	"jingdezhen-ceramics-backend/internal/modules/notification"
 	"jingdezhen-ceramics-backend/internal/modules/portfolio"
 	"jingdezhen-ceramics-backend/internal/modules/user"
+	"jingdezhen-ceramics-backend/internal/ws"
 
 	"github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
@@ -19,6 +20,7 @@ import (
 // SetupRoutes configures the API routes.
 func SetupRoutes(
 	app *fiber.App, jwtSecretKey string,
+	wsHandler *ws.Handler,
 	userHandler *user.Handler,
 	notifHandler *notification.Handler,
 	forumHandler *forum.Handler,
@@ -33,7 +35,15 @@ func SetupRoutes(
 		return c.JSON(fiber.Map{"message": "Welcome to Jingdezhen Ceramics Learning and Communication Platform!"})
 	})
 
-	app.Get("/ws", websocket.New(wsHandler))
+	// --- WebSocket Route ---
+	// This route group ensures the JWT middleware runs first to authenticate the user.
+	wsGroup := app.Group("/ws")
+	wsGroup.Use(middleware.JWTMAuth(jwtSecretKey))
+	wsGroup.Use(ws.WsUpgradeMiddleware()) // This middleware checks if it's a valid WebSocket request
+	// Pass the handler's method, not the handler struct itself.
+	// The websocket.New() middleware expects a function argument with signature func(*websocket.Conn)
+	// that it can call whenever a new WebSocket connection is established.
+	wsGroup.Get("/", websocket.New(wsHandler.UpgradeConnection))
 
 	/* --- Contact (send feedback) --- */
 	app.Post("/contact", userHandler.SubmitContactForm)

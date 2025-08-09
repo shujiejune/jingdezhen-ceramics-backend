@@ -19,6 +19,7 @@ import (
 	"jingdezhen-ceramics-backend/internal/modules/notification"
 	"jingdezhen-ceramics-backend/internal/modules/portfolio"
 	"jingdezhen-ceramics-backend/internal/modules/user"
+	"jingdezhen-ceramics-backend/internal/ws"
 	"jingdezhen-ceramics-backend/pkg/email"
 
 	"github.com/gofiber/fiber/v2"
@@ -36,11 +37,16 @@ func main() {
 		log.Fatalf("Could not load config: %v", err)
 	}
 
-	// Initialize Fiber App
-	app := fiber.New()
-	//e.Logger.Fatal(e.Start(":1323"))
+	// --- Create a cancellable context for the entire application lifecycle ---
+	// This context will be passed to long-running background services.
+	ctx, cancel := context.WithCancel(context.Background())
+	// We will call cancel() later when we receive a shutdown signal.
+	defer cancel()
 
-	// Middleware
+	// --- Initialize Fiber App ---
+	app := fiber.New()
+
+	// --- Middleware ---
 	app.Use(recover.New())
 	app.Use(logger.New())
 	app.Use(cors.New(cors.Config{
@@ -50,7 +56,7 @@ func main() {
 		AllowCredentials: true,
 	}))
 
-	// Database connection
+	// --- Database connection ---
 	dbConfig, err := pgxpool.ParseConfig(cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("Unable to parse database configuration: %v\n", err)
@@ -67,7 +73,15 @@ func main() {
 	}
 	log.Println("Successfully connected to the database!")
 
-	// Dependency injection
+	// --- WebSocket Initialization ---
+	// 1. Create the WebSocket Hub (our service).
+	wsHub := ws.NewHub()
+	// 2. Start the Hub's main event loop in a background goroutine.
+	go wsHub.Run(ctx)
+	// 3. Create the WebSocket handler, passing it the Hub.
+	wsHandler := ws.NewHandler(wsHub)
+
+	// --- Dependency injection ---
 	// 1. Initialize Google OAuth Config
 	googleOAuthConfig := &oauth2.Config{
 		RedirectURL:  cfg.GoogleOAuthRedirectURL,
@@ -105,7 +119,7 @@ func main() {
 	// adminHandler := user.NewAdminHandler(userService, other admin services)
 
 	notifRepo := notification.NewRepository(dbPool)
-	notifService := notification.NewService(notifRepo, userRepo, nil) // WebSocket service is nil for now
+	notifService := notification.NewService(notifRepo, userRepo, wsHub)
 	notifHandler := notification.NewHandler(notifService)
 
 	forumRepo := forum.NewRepository(dbPool)
@@ -136,8 +150,9 @@ func main() {
 	portfolioService := portfolio.NewService(portfolioRepo)
 	portfolioHandler := portfolio.NewHandler(portfolioService)
 
-	// Initialize router, passing all handlers and other necessary dependencies
+	// --- Initialize router, passing all handlers and other necessary dependencies ---
 	api.SetupRoutes(app, cfg.JWTSecret,
+		wsHandler,
 		userHandler,
 		// adminHandler, // Pass if you have a separate admin handler instance
 		notifHandler,
@@ -150,7 +165,7 @@ func main() {
 		portfolioHandler,
 	)
 
-	// Start server (graceful shutdown logic)
+	// --- Start server (graceful shutdown logic) ---
 	// Listen on a channel for interrupt signals.
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
@@ -163,6 +178,11 @@ func main() {
 	// Block until a signal is received.
 	<-quit
 	log.Println("Shutdown signal received, gracefully shutting down...")
+
+	// --- Signal the WebSocket Hub to shut down ---
+	// By calling cancel(), the ctx.Done() channel in wsHub.Run() will be closed,
+	// allowing the Hub to exit its loop cleanly.
+	cancel()
 
 	// Attempt a graceful shutdown.
 	if err := app.ShutdownWithTimeout(10 * time.Second); err != nil {

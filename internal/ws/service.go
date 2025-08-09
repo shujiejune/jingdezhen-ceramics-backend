@@ -1,43 +1,28 @@
-package websocket
+package ws
 
 import (
 	"context"
 	"encoding/json"
+	"jingdezhen-ceramics-backend/internal/models"
 	"log"
-	"net/http"
 	"sync"
 	"time"
-
-	"jingdezhen-ceramics-backend/internal/models"
 
 	"github.com/gofiber/contrib/websocket"
 )
 
 const (
-	// Time allowed to write a message to the peer.
-	writeWait = 10 * time.Second
-	// Time allowed to read the next pong message from the peer.
-	pongWait = 60 * time.Second
-	// Send pings to peer with this period. Must be less than pongWait.
+	writeWait  = 10 * time.Second
+	pongWait   = 60 * time.Second
 	pingPeriod = (pongWait * 9) / 10
 )
-
-var upgrader = websocket.Upgrader{
-	ReadBufferSize:  1024,
-	WriteBufferSize: 1024,
-	// CheckOrigin allows connections from any origin.
-	// For production, you should restrict this to your frontend's domain.
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
-}
 
 // Client is a middleman between the websocket connection and the hub.
 type Client struct {
 	hub    *Hub
 	userID string
 	conn   *websocket.Conn
-	send   chan []byte // Buffered channel of outbound messages.
+	send   chan []byte
 }
 
 // readPump pumps messages from the websocket connection to the hub.
@@ -48,13 +33,13 @@ func (c *Client) readPump() {
 	}()
 	c.conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.conn.SetPongHandler(func(string) error { c.conn.SetReadDeadline(time.Now().Add(pongWait)); return nil })
-	// The client's readPump doesn't need to do anything with incoming messages from the client,
-	// as our notifications are server-to-client only. This loop just keeps the connection alive.
+
 	for {
-		_, _, err := c.conn.ReadMessage()
-		if err != nil {
+		// The server doesn't need to read any messages from the client for this feature,
+		// but this loop is necessary to detect when the client closes the connection.
+		if _, _, err := c.conn.ReadMessage(); err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("error: %v", err)
+				log.Printf("ws.Client.readPump: error: %v", err)
 			}
 			break
 		}
@@ -73,7 +58,6 @@ func (c *Client) writePump() {
 		case message, ok := <-c.send:
 			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
-				// The hub closed the channel.
 				c.conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
@@ -89,7 +73,7 @@ func (c *Client) writePump() {
 	}
 }
 
-// Hub maintains the set of active clients and broadcasts messages to the clients.
+// Hub maintains the set of active clients and broadcasts messages to them.
 type Hub struct {
 	clients    map[string]*Client
 	register   chan *Client
@@ -106,11 +90,18 @@ func NewHub() *Hub {
 	}
 }
 
-// Run starts the hub's event loop.
+// Run starts the hub's event loop. It must be run in a separate goroutine.
 func (h *Hub) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			// If the context is cancelled, close all client connections.
+			h.mu.Lock()
+			for _, client := range h.clients {
+				close(client.send)
+			}
+			h.clients = make(map[string]*Client)
+			h.mu.Unlock()
 			return
 		case client := <-h.register:
 			h.mu.Lock()
@@ -136,14 +127,15 @@ func (h *Hub) SendToUser(userID string, notification *models.Notification) {
 	if ok {
 		message, err := json.Marshal(notification)
 		if err != nil {
-			log.Printf("error marshalling notification: %v", err)
+			log.Printf("ws.Hub.SendToUser: error marshalling notification: %v", err)
 			return
 		}
-		// Use a select with a default case to prevent blocking if the send channel is full.
 		select {
 		case client.send <- message:
 		default:
-			log.Printf("client %s send channel full, dropping message", userID)
+			// If the send channel is full, it means the client is lagging.
+			// We can choose to drop the message to prevent the server from blocking.
+			log.Printf("ws.Hub.SendToUser: client %s send channel full, dropping message", userID)
 		}
 	}
 }
@@ -154,21 +146,4 @@ func (h *Hub) IsUserOnline(userID string) bool {
 	defer h.mu.RUnlock()
 	_, ok := h.clients[userID]
 	return ok
-}
-
-// ServeWs handles websocket requests from the peer.
-// You would call this from your Echo router.
-func ServeWs(hub *Hub, w http.ResponseWriter, r *http.Request, userID string) {
-	conn, err := upgrader.Upgrade(w, r, nil)
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	client := &Client{hub: hub, userID: userID, conn: conn, send: make(chan []byte, 256)}
-	client.hub.register <- client
-
-	// Allow collection of memory referenced by the caller by doing all work in
-	// new goroutines.
-	go client.writePump()
-	go client.readPump()
 }
