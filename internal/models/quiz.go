@@ -5,6 +5,8 @@ import "time"
 // Quiz defines the structure for a "quiz" content block.
 type Quiz struct {
 	ID        int64      `json:"id" db:"id"`
+	OwnerType *string    `json:"-" db:"owner_type"` // e.g., 'course', 'course_chapter'
+	OwnerID   *int64     `json:"-" db:"owner_id"`
 	Title     string     `json:"title" db:"title"`
 	Questions []Question `json:"questions"`
 }

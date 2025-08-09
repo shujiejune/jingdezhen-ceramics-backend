@@ -1,6 +1,6 @@
 -- festivals, fairs, museums
 CREATE TABLE events (
-    id SERIAL PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     title VARCHAR(255) NOT NULL,
     type VARCHAR(50) NOT NULL, -- 'Festival', 'Fair', 'Museum', 'Exhibition'
     brief_introduction TEXT,

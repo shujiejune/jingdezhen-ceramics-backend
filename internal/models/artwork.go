@@ -31,15 +31,14 @@ type Artwork struct {
 	ArtistNameOverride *string        `json:"artist_name_override,omitempty" db:"artist_name_override"`
 	ThumbnailURL       string         `json:"thumbnail_url" db:"thumbnail_url"`
 	Description        *string        `json:"description,omitempty" db:"description"`
-	CreationYear       *int           `json:"creation_year,omitempty" db:"creation_year"`
+	Period             string         `json:"period" db:"period"`
 	Dimensions         *string        `json:"dimensions,omitempty" db:"dimensions"`
-	Category           string         `json:"category,omitempty" db:"category"` // Or CategoryID if you have an artwork_categories table
-	Introduction       *string        `json:"introduction,omitempty" db:"introduction"`
+	Category           string         `json:"category" db:"category"`       // Or CategoryID if you have an artwork_categories table
 	IsFavorite         bool           `json:"is_favorite,omitempty" db:"-"` // For current user, populated in service
 	FavoriteCount      int            `json:"favorite_count" db:"-"`        // Calculated
 	NoteCount          int            `json:"note_count" db:"-"`            // Calculated
 	Images             []ArtworkImage `json:"images,omitempty" db:"-"`      // Loaded separately or via JOIN aggregation
-	Tags               []string       `json:"tags,omitempty" db:"-"`        // Loaded via junction table
+	Tags               []Tag          `json:"tags,omitempty" db:"-"`        // Loaded via junction table
 	CreatedAt          time.Time      `json:"created_at" db:"created_at"`
 	UpdatedAt          *time.Time     `json:"updated_at" db:"updated_at"`
 }
@@ -50,11 +49,10 @@ type CreateArtworkData struct {
 	ArtistID           *int     `json:"artist_id,omitempty"`
 	ArtistNameOverride string   `json:"artist_name_override,omitempty"`
 	Description        string   `json:"description,omitempty"`
-	CreationYear       *int     `json:"creation_year,omitempty"`
+	Period             string   `json:"period" validate:"required"`
 	Category           string   `json:"category" validate:"required"`
-	Introduction       string   `json:"introduction,omitempty"`
 	ImageURLs          []string `json:"image_urls,omitempty" validate:"omitempty,dive,url"` // For initial upload
-	Tags               []string `json:"tags,omitempty"`
+	Tags               []Tag    `json:"tags,omitempty"`
 }
 
 type UserFavArtworkEntry struct {
@@ -65,7 +63,7 @@ type UserFavArtworkEntry struct {
 // ArtworkFilters defines the available query parameters for filtering artworks.
 type ArtworkFilters struct {
 	Category string
-	ArtistID int64
+	ArtistID int
 	Page     int
 	Limit    int
 }

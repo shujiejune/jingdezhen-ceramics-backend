@@ -1,5 +1,5 @@
 CREATE TABLE ceramic_stories (
-    id SERIAL PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     dynasty_name VARCHAR(100) NOT NULL,
     period VARCHAR(50), -- e.g., "Early Ming", "Late Qing"
     start_year INT,
