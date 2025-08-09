@@ -32,7 +32,7 @@ type RepositoryInterface interface {
 	FindCommentsByPostID(ctx context.Context, postID int64) ([]models.ForumComment, error)
 	FindAllCategories(ctx context.Context) ([]models.ForumCategory, error)
 	FindCategoryByID(ctx context.Context, categoryID int64) (*models.ForumCategory, error)
-	FindAllTags(ctx context.Context) ([]models.Tag, error)
+	FindAllTags(ctx context.Context) ([]models.TagWithPostCount, error)
 
 	CheckPostOwnership(ctx context.Context, postID int64, userID string) (bool, error)
 	CheckCommentOwnership(ctx context.Context, commentID int64, userID string) (bool, error)
@@ -122,7 +122,7 @@ func (r *Repository) FindAllPosts(ctx context.Context, filters models.PostFilter
 		JOIN users u ON fp.user_id = u.id
 		LEFT JOIN forum_categories fc ON fp.category_id = fc.id
 	`
-	if filters.Tag != "" {
+	if filters.TagName != "" {
 		baseQuery += ` JOIN forum_post_tags fpt ON fp.id = fpt.post_id
 		               JOIN tags t ON fpt.tag_id = t.id`
 	}
@@ -133,9 +133,9 @@ func (r *Repository) FindAllPosts(ctx context.Context, filters models.PostFilter
 		args = append(args, filters.CategoryID)
 		argIdx++
 	}
-	if filters.Tag != "" {
+	if filters.TagName != "" {
 		whereClause += fmt.Sprintf(" AND t.name = $%d", argIdx)
-		args = append(args, filters.Tag)
+		args = append(args, filters.TagName)
 		argIdx++
 	}
 
@@ -296,8 +296,7 @@ func (r *Repository) FindCategoryByID(ctx context.Context, categoryID int64) (*m
 	return &cat, nil
 }
 
-func (r *Repository) FindAllTags(ctx context.Context) ([]models.Tag, error) {
-	tags := []models.Tag{}
+func (r *Repository) FindAllTags(ctx context.Context) ([]models.TagWithPostCount, error) {
 	// This query also gets the count of posts for each tag, useful for a tag cloud.
 	query := `
 		SELECT t.id, t.name, COUNT(fpt.post_id) as post_count
@@ -310,14 +309,12 @@ func (r *Repository) FindAllTags(ctx context.Context) ([]models.Tag, error) {
 	if err != nil {
 		return nil, fmt.Errorf("repository.FindAllTags: %w", err)
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var tag models.Tag
-		if err := rows.Scan(&tag.ID, &tag.Name, &tag.PostCount); err != nil {
-			return nil, fmt.Errorf("repository.FindAllTags.Scan: %w", err)
-		}
-		tags = append(tags, tag)
+
+	tags, err := pgx.CollectRows(rows, pgx.RowToStructByName[models.TagWithPostCount])
+	if err != nil {
+		return nil, fmt.Errorf("repository.FindAllTags.Scan: %w", err)
 	}
+
 	return tags, nil
 }
 

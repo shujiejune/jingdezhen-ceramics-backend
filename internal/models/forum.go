@@ -53,7 +53,7 @@ type PostFilters struct {
 	Page       int
 	Limit      int
 	Sort       string // "latest", "hottest"
-	TagID      int64
+	TagName    string
 	CategoryID int64
 }
 

@@ -1,5 +1,5 @@
 CREATE TABLE artists (
-    id SERIAL PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
     bio TEXT,
     user_id UUID UNIQUE REFERENCES users(id) ON DELETE SET NULL, -- Link to a user account if the artist is a platform user

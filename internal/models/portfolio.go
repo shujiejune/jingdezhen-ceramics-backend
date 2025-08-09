@@ -34,7 +34,7 @@ type PortfolioFilters struct {
 	Page  int
 	Limit int
 	Sort  string // "upvotes", "latest" (default)
-	Tags  []Tag
+	Tags  []string
 }
 
 // CreateWorkRequest defines the request body for creating a new portfolio work.
@@ -43,7 +43,7 @@ type CreateWorkRequest struct {
 	Description       *string  `json:"description" validate:"required,min=10"`
 	ImageURLs         []string `json:"image_urls" validate:"required,min=1,max=8,dive,url"`
 	ThumbnailURLIndex *int     `json:"thumbnail_url_index,omitempty" validate:"omitempty,gte=0"` // Index in ImageURLs to use as thumbnail
-	Tags              []Tag    `json:"tags,omitempty"`
+	Tags              []string `json:"tags,omitempty"`
 }
 
 // UpdateWorkRequest defines the request body for updating a portfolio work.
@@ -51,7 +51,7 @@ type UpdateWorkRequest struct {
 	Title       *string              `json:"title,omitempty" validate:"omitempty,min=3,max=255"`
 	Description *string              `json:"description,omitempty" validate:"omitempty,min=10"`
 	Images      []PortfolioWorkImage `json:"images,omitempty" validate:"max=8"`
-	Tags        []Tag                `json:"tags,omitempty"`
+	Tags        []string             `json:"tags,omitempty"`
 }
 
 // ToggleUpvoteResult is a generic response for upvote/downvote actions.

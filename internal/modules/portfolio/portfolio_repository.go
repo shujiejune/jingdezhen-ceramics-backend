@@ -30,7 +30,7 @@ type RepositoryInterface interface {
 	FindWorkByID(ctx context.Context, workID int64) (*models.PortfolioWork, error)
 	GetWorkCountByUserID(ctx context.Context, userID string) (int, error)
 	GetWorkImages(ctx context.Context, workID int64) ([]models.PortfolioWorkImage, error)
-	GetWorkTags(ctx context.Context, workID int64) ([]string, error)
+	GetWorkTags(ctx context.Context, workID int64) ([]models.Tag, error)
 	CreateWork(ctx context.Context, userID string, data models.CreateWorkRequest) (*models.PortfolioWork, error)
 	UpdateWork(ctx context.Context, workID int64, data models.UpdateWorkRequest) (*models.PortfolioWork, error)
 	DeleteWork(ctx context.Context, workID int64) error
@@ -164,9 +164,9 @@ func (r *Repository) GetWorkImages(ctx context.Context, workID int64) ([]models.
 }
 
 // GetWorkTags retrieves all tag names for a given portfolio work.
-func (r *Repository) GetWorkTags(ctx context.Context, workID int64) ([]string, error) {
+func (r *Repository) GetWorkTags(ctx context.Context, workID int64) ([]models.Tag, error) {
 	query := `
-		SELECT t.name
+		SELECT t.id, t.name
 		FROM tags t
 		JOIN portfolio_work_tags pwt ON t.id = pwt.tag_id
 		WHERE pwt.portfolio_work_id = $1
@@ -176,11 +176,18 @@ func (r *Repository) GetWorkTags(ctx context.Context, workID int64) ([]string, e
 	if err != nil {
 		return nil, fmt.Errorf("repository.GetWorkTags.Query: %w", err)
 	}
-	return pgx.CollectRows(rows, pgx.RowTo[string])
+	tags, err := pgx.CollectRows(rows, pgx.RowToStructByName[models.Tag])
+	if err != nil {
+		return nil, fmt.Errorf("repository.GetWorkTags.Scan: %w", err)
+	}
+	return tags, nil
 }
 
 // linkTagsToWork is a helper function to be used within a transaction.
 func (r *Repository) linkTagsToWork(ctx context.Context, workID int64, tags []string) error {
+	if len(tags) == 0 {
+		return nil
+	}
 	// First, find or create all tags and get their IDs
 	tagIDs := make([]int64, 0, len(tags))
 	for _, tagName := range tags {
@@ -204,9 +211,9 @@ func (r *Repository) linkTagsToWork(ctx context.Context, workID int64, tags []st
 	}
 
 	// Now, bulk insert the associations into the junction table
-	tagLinkRows := make([][]interface{}, len(tagIDs))
+	tagLinkRows := make([][]any, len(tagIDs))
 	for i, tagID := range tagIDs {
-		tagLinkRows[i] = []interface{}{workID, tagID}
+		tagLinkRows[i] = []any{workID, tagID}
 	}
 
 	_, err := r.executor.CopyFrom(

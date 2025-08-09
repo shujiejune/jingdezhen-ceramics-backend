@@ -36,7 +36,7 @@ func (h *Handler) GetPosts(c *fiber.Ctx) error {
 		Page:       page,
 		Limit:      limit,
 		Sort:       c.Query("sort"), // e.g., "hottest"
-		Tag:        c.Query("tag"),  // e.g., "glazing"
+		TagName:    c.Query("tag"),  // e.g., "glazing"
 		CategoryID: categoryID,      // Will be 0 if not provided or invalid
 	}
 

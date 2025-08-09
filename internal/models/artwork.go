@@ -4,7 +4,7 @@ import "time"
 
 // Artist represents an artist (can be a platform user or historical)
 type Artist struct {
-	ID        int        `json:"id" db:"id"`
+	ID        int64      `json:"id" db:"id"`
 	Name      string     `json:"name" db:"name"`
 	Bio       *string    `json:"bio,omitempty" db:"bio"`
 	UserID    *string    `json:"user_id,omitempty" db:"user_id"` // Link to users.id (UUID string)
@@ -26,7 +26,7 @@ type ArtworkImage struct {
 type Artwork struct {
 	ID                 int64          `json:"id" db:"id"` // Use int64 for BIGSERIAL
 	Title              string         `json:"title" db:"title"`
-	ArtistID           *int           `json:"artist_id,omitempty" db:"artist_id"` // FK to artists.id
+	ArtistID           *int64         `json:"artist_id,omitempty" db:"artist_id"` // FK to artists.id
 	ArtistName         *string        `json:"artist_name,omitempty" db:"-"`       // Populated by JOIN if ArtistID is present
 	ArtistNameOverride *string        `json:"artist_name_override,omitempty" db:"artist_name_override"`
 	ThumbnailURL       string         `json:"thumbnail_url" db:"thumbnail_url"`
@@ -63,7 +63,7 @@ type UserFavArtworkEntry struct {
 // ArtworkFilters defines the available query parameters for filtering artworks.
 type ArtworkFilters struct {
 	Category string
-	ArtistID int
+	ArtistID int64
 	Page     int
 	Limit    int
 }

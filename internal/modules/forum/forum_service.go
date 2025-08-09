@@ -13,7 +13,7 @@ type ServiceInterface interface {
 	GetPostDetails(ctx context.Context, userID string, postID int64) (*models.ForumPost, []*models.ForumComment, error)
 	SearchPosts(ctx context.Context, userID, query string, page, limit int) ([]models.ForumPost, int, error)
 	GetCategories(ctx context.Context) ([]models.ForumCategory, error)
-	GetTags(ctx context.Context) ([]models.Tag, error)
+	GetTags(ctx context.Context) ([]models.TagWithPostCount, error)
 
 	GetSavedForumPosts(ctx context.Context, userID string, page, limit int) ([]models.SavedPostEntry, int, error)
 	IsValidCategory(ctx context.Context, categoryID int64) (bool, error)
@@ -166,7 +166,7 @@ func (s *Service) GetCategories(ctx context.Context) ([]models.ForumCategory, er
 	return s.repo.FindAllCategories(ctx)
 }
 
-func (s *Service) GetTags(ctx context.Context) ([]models.Tag, error) {
+func (s *Service) GetTags(ctx context.Context) ([]models.TagWithPostCount, error) {
 	return s.repo.FindAllTags(ctx)
 }
 
@@ -312,7 +312,7 @@ func (s *Service) TogglePostLike(ctx context.Context, userID string, postID int6
 		// After success, send notification to the post author
 		post, err := s.repo.FindPostByID(ctx, postID)
 		if err != nil {
-			log.Printf("service.TogglePostLike.FindPost: %w", err)
+			log.Printf("service.TogglePostLike.FindPost: %v", err)
 		}
 		go func() {
 			params := models.CreateNotificationParams{
@@ -369,7 +369,7 @@ func (s *Service) ToggleCommentLike(ctx context.Context, userID string, commentI
 		// After success, send notification to the post author
 		comment, err := s.repo.FindCommentByID(ctx, commentID)
 		if err != nil {
-			log.Printf("service.ToggleCommentLike.FindComment: %w", err)
+			log.Printf("service.ToggleCommentLike.FindComment: %v", err)
 		}
 		go func() {
 			params := models.CreateNotificationParams{

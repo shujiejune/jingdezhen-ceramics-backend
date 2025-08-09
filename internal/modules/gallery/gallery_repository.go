@@ -26,7 +26,7 @@ type RepositoryInterface interface {
 	FindAllArtworks(ctx context.Context, filters models.ArtworkFilters) ([]models.Artwork, int, error)
 	FindArtworkByID(ctx context.Context, artworkID int64) (*models.Artwork, error)
 	GetArtworkImages(ctx context.Context, artworkID int64) ([]models.ArtworkImage, error)
-	GetArtworkTags(ctx context.Context, artworkID int64) ([]string, error)
+	GetArtworkTags(ctx context.Context, artworkID int64) ([]models.Tag, error)
 	FindAllArtists(ctx context.Context, page, limit int) ([]models.Artist, int, error)
 	FindArtistByID(ctx context.Context, artistID int64) (*models.Artist, error)
 	FindAllCategories(ctx context.Context) ([]string, error)
@@ -80,7 +80,7 @@ func (r *Repository) scanPartialArtwork(row Scannable) (*models.Artwork, error) 
 	}
 
 	if artistID.Valid {
-		id := int(artistID.Int64)
+		id := artistID.Int64
 		art.ArtistID = &id
 	}
 	if artistName.Valid {
@@ -96,9 +96,7 @@ func (r *Repository) scanFullArtwork(row Scannable) (*models.Artwork, error) {
 	var artistName sql.NullString
 	var artistNameOverride sql.NullString
 	var description sql.NullString
-	var creationYear sql.NullInt32
 	var dimensions sql.NullString
-	var introduction sql.NullString
 	var updatedAt sql.NullTime
 
 	// The order of these &variables must match the order of columns in the SELECT statement.
@@ -113,9 +111,7 @@ func (r *Repository) scanFullArtwork(row Scannable) (*models.Artwork, error) {
 		&artistName,
 		&artistNameOverride,
 		&description,
-		&creationYear,
 		&dimensions,
-		&introduction,
 	)
 	if err != nil {
 		return nil, err
@@ -125,7 +121,7 @@ func (r *Repository) scanFullArtwork(row Scannable) (*models.Artwork, error) {
 		art.UpdatedAt = &updatedAt.Time
 	}
 	if artistID.Valid {
-		id := int(artistID.Int64)
+		id := artistID.Int64
 		art.ArtistID = &id
 	}
 	if artistName.Valid {
@@ -137,15 +133,8 @@ func (r *Repository) scanFullArtwork(row Scannable) (*models.Artwork, error) {
 	if description.Valid {
 		art.Description = &description.String
 	}
-	if creationYear.Valid {
-		year := int(creationYear.Int32)
-		art.CreationYear = &year
-	}
 	if dimensions.Valid {
 		art.Dimensions = &dimensions.String
-	}
-	if introduction.Valid {
-		art.Introduction = &introduction.String
 	}
 
 	return &art, nil
@@ -159,7 +148,7 @@ func (r *Repository) FindAllArtworks(ctx context.Context, filters models.Artwork
 		LEFT JOIN artists ar ON a.artist_id = ar.id
 	`
 	var whereClauses []string
-	var args []interface{}
+	var args []any
 	argIdx := 1
 
 	if filters.Category != "" {
@@ -256,25 +245,23 @@ func (r *Repository) GetArtworkImages(ctx context.Context, artworkID int64) ([]m
 	return images, nil
 }
 
-func (r *Repository) GetArtworkTags(ctx context.Context, artworkID int64) ([]string, error) {
-	tags := []string{}
+func (r *Repository) GetArtworkTags(ctx context.Context, artworkID int64) ([]models.Tag, error) {
 	query := `
-		SELECT t.name FROM tags t
+		SELECT t.id, t.name FROM tags t
 		JOIN artwork_tags at ON t.id = at.tag_id
 		WHERE at.artwork_id = $1
+		ORDER BY t.name
 	`
 	rows, err := r.executor.Query(ctx, query, artworkID)
 	if err != nil {
-		return nil, fmt.Errorf("repository.GetArtworkTags: %w", err)
+		return nil, fmt.Errorf("repository.GetArtworkTags.Query: %w", err)
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var tag string
-		if err := rows.Scan(&tag); err != nil {
-			return nil, fmt.Errorf("repository.GetArtworkTags.Scan: %w", err)
-		}
-		tags = append(tags, tag)
+
+	tags, err := pgx.CollectRows(rows, pgx.RowToStructByName[models.Tag])
+	if err != nil {
+		return nil, fmt.Errorf("repository.GetArtworkTags.Scan: %w", err)
 	}
+
 	return tags, nil
 }
 

@@ -31,6 +31,7 @@ func (h *Handler) GetWorks(c *fiber.Ctx) error {
 	userID, _ := utils.GetUserIDFromContext(c) // Optional: for upvotes status
 	page, limit := utils.GetPageLimit(c)
 	sort := c.Query("sort")
+
 	tagsQuery := c.Query("tags")
 	var tags []string
 	if tagsQuery != "" {

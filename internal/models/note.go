@@ -58,7 +58,7 @@ type AddLinkToNoteData struct {
 
 // ForumPostPublishDetails holds details for publishing a note to the forum
 type ForumPostPublishDetails struct {
-	Title      string   `json:"title" validate:"required,max=255"`
-	CategoryID int64    `json:"category_id" validate:"required,gt=0"`
-	Tags       []string `json:"tags,omitempty"` // Or []int64 for tag IDs
+	Title      string `json:"title" validate:"required,max=255"`
+	CategoryID int64  `json:"category_id" validate:"required,gt=0"`
+	Tags       []Tag  `json:"tags,omitempty"`
 }
